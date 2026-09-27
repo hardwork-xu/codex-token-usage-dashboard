@@ -182,7 +182,7 @@ class _Turn:
         self.interval_context.observe(self.current_context["model"], self.current_context["serviceTier"],
                                       incomplete=self.current_context["pricingMetadataStatus"] != "known")
 
-    def add(self, amount: dict[str, int], timestamp: float | int | None, *, metadata: dict[str, Any]) -> None:
+    def add(self, amount: dict[str, int], timestamp: float | int | None, *, metadata: dict[str, Any], api_context: str | None = None) -> None:
         if self.tokens is None:
             self.tokens = dict(amount)
         else:
@@ -196,7 +196,14 @@ class _Turn:
             # Freeze numeric usage under the context that covered this increment.
             # Later context, repeated snapshots and completed-turn updates cannot
             # relabel prior slices. No prompt or response bodies are retained.
-            key = (day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"])
+            # An aggregate below the threshold bounds every constituent call.
+            # A large aggregate alone never proves a long individual request.
+            context = api_context or ("short" if amount["input"] <= 272_000 else "unknown")
+            # These legacy API schedules apply their threshold to the full
+            # session. A short call cannot prove a short session.
+            if metadata["model"] in {"gpt-5.5", "gpt-5.4"} and context == "short":
+                context = "unknown"
+            key = (day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"], context)
             sliced = self.usage_slices.setdefault(key, _empty_tokens())
             for field, value in amount.items():
                 sliced[field] += value
@@ -226,8 +233,8 @@ class _Turn:
             "dailyUsage": {day: dict(tokens) for day, tokens in self.daily_usage.items()},
             "undatedTokens": dict(self.undated_tokens),
             "usageSlices": [{"day": day, "model": model, "serviceTier": tier,
-                             "pricingMetadataStatus": status, "tokens": dict(tokens)}
-                            for (day, model, tier, status), tokens in self.usage_slices.items()],
+                             "pricingMetadataStatus": status, "apiContext": context, "tokens": dict(tokens)}
+                            for (day, model, tier, status, context), tokens in self.usage_slices.items()],
             **self.pricing.export(),
         }
 
@@ -346,17 +353,21 @@ class _Reader:
         log-context labels, not independently verified provider routing data.
         """
         interval = turn.interval_context
-        if cumulative_delta and (interval.model_changed or interval.tier_changed):
-            uncertain = interval.export()
-            uncertain["pricingMetadataStatus"] = "unknown"
-            remainder = _delta(amount, last) if last is not None else None
-            if remainder is not None:
-                turn.add(remainder, timestamp, metadata=uncertain)
-                turn.add(last, timestamp, metadata=turn.current_context)
-            else:
-                turn.add(amount, timestamp, metadata=uncertain)
+        changed = cumulative_delta and (interval.model_changed or interval.tier_changed)
+        metadata = interval.export() if changed else turn.current_context
+        if changed:
+            metadata["pricingMetadataStatus"] = "unknown"
+        remainder = _delta(amount, last) if last is not None else None
+        if remainder is not None:
+            # last_token_usage is a single-call observation. Keep its context
+            # band even when a preceding delta contains multiple missing calls.
+            if any(remainder.values()):
+                turn.add(remainder, timestamp, metadata=metadata)
+            turn.add(last, timestamp, metadata=turn.current_context,
+                     api_context="long" if last["input"] > 272_000 else "short")
         else:
-            turn.add(amount, timestamp, metadata=turn.current_context)
+            turn.add(amount, timestamp, metadata=metadata,
+                     api_context="unknown" if last is not None else None)
         if any(amount.values()):
             turn.reset_interval()
 

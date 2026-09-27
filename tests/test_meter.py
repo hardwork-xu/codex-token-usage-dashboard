@@ -59,10 +59,10 @@ class SettingsTests(unittest.TestCase):
             with self.subTest(day=day), self.assertRaises(ValueError):
                 meter.validate_settings({"subscriptionRenewalDay": day})
 
-    def test_defaults_use_user_credit_price_in_usd_and_confirmed_standard_speed(self):
+    def test_defaults_use_api_in_usd_and_confirmed_standard_speed(self):
         result = meter.validate_settings({})
         self.assertEqual((result["pricingMode"], result["usdPerCredit"], result["currencyPerUsd"], result["speedMode"]),
-                         ("official", "0.04", "1", "standard"))
+                         ("api", "0.04", "1", "standard"))
         self.assertEqual(result["currencyCode"], "USD")
         self.assertEqual(result["currencySymbol"], "$")
         self.assertEqual(result["exchangeRates"], {"CNY": "6.70842351", "USD": "1", "HKD": "7.84339018"})
@@ -120,7 +120,7 @@ class SettingsTests(unittest.TestCase):
             for invalid in (None, True, [], {}, "", "0", "-1", "NaN", "Infinity", "1e-999999", "1e999999"):
                 with self.subTest(key=key, invalid=invalid), self.assertRaises(ValueError):
                     meter.validate_settings({key: invalid})
-        for value in ({"pricingMode": "api"}, {"speedMode": "priority"}, {"speedMode": []}):
+        for value in ({"pricingMode": "invalid"}, {"speedMode": "priority"}, {"speedMode": []}):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 meter.validate_settings(value)
 
@@ -217,6 +217,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(self.subject.settings(), meter.DEFAULT_SETTINGS)
 
     def test_snapshot_estimates_by_categories_at_confirmed_standard_point(self):
+        meter.write_json(self.folder / "settings.json", {"pricingMode": "official"})
         turn = self.result["turns"][0]
         turn.update({"model": "gpt-6-astra", "serviceTier": None, "pricingMetadataStatus": "unknown", "quality": "complete",
                      "tokens": {"total": 105000, "input": 100000, "cachedInput": 90000,
@@ -232,7 +233,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertTrue(all(price[key] is None for key in ("creditsMax", "usdMax", "amountMax")))
 
     def test_explicit_current_auto_setting_uses_one_midpoint_and_no_max_fields(self):
-        settings = meter.validate_settings({"speedMode": "auto", "currencyCode": "USD"})
+        settings = meter.validate_settings({"pricingMode": "official", "speedMode": "auto", "currencyCode": "USD"})
         meter.write_json(self.folder / "settings.json", settings)
         self.result["turns"][0].update({
             "model": "gpt-6-astra", "serviceTier": None, "pricingMetadataStatus": "unknown", "quality": "complete",

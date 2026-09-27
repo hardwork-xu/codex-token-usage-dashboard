@@ -96,7 +96,7 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
     money = {key: Decimal(0) for key in _MONEY_FIELDS}
     available = dict.fromkeys(_MONEY_FIELDS, False)
     models = {}
-    turn_count = unpriced_tokens = unpriced_turns = 0
+    turn_count = unpriced_tokens = unpriced_turns = uncertain_context_tokens = long_context_tokens = 0
     partial = bool(coverage_gap or unassigned)
     for turn, daily in prepared:
         selected = [amount for day, amount in daily.items() if start <= day < end]
@@ -121,6 +121,8 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
         else:
             selected_turn.pop("usageSlices", None)
         estimate = estimate_turn(selected_turn, settings)
+        uncertain_context_tokens += estimate.get("apiContextUncertainTokens", 0)
+        long_context_tokens += estimate.get("apiLongContextTokens", 0)
         turn_partial = (turn.get("quality") != "complete" or
                         bool(turn.get("readingIncomplete")) or estimate["status"] == "partial")
         partial |= turn_partial
@@ -138,14 +140,16 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
         for row in estimate["models"]:
             model = row["model"]
             group = models.setdefault(model, {
-                "model": model, "label": row["label"], "tokens": _zero(),
-                "unpricedTokens": 0, "turnCount": 0, "partial": bool(coverage_gap or unassigned),
+                "model": model, "label": row["label"], "standardRates": row["standardRates"], "tokens": _zero(),
+                "unpricedTokens": 0, "apiContextUncertainTokens": 0, "apiLongContextTokens": 0, "turnCount": 0, "partial": bool(coverage_gap or unassigned),
                 "money": {key: Decimal(0) for key in _MONEY_FIELDS},
                 "available": dict.fromkeys(_MONEY_FIELDS, False),
             })
             _add(group["tokens"], row["tokens"])
             group["turnCount"] += 1
             group["unpricedTokens"] += row["unpricedTokens"]
+            group["apiContextUncertainTokens"] += row.get("apiContextUncertainTokens", 0)
+            group["apiLongContextTokens"] += row.get("apiLongContextTokens", 0)
             group["partial"] |= turn_partial or row["partial"]
             for key in _MONEY_FIELDS:
                 if row[key] is not None:
@@ -153,12 +157,18 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
                     group["available"][key] = True
 
     notes = ["按本机日期汇总已记录用量；金额为已可计价部分的估算，不代表订阅扣款。"]
+    if settings.get("pricingMode") == "api":
+        notes.append("金额为按各模型当前公开 API Standard 费率重放已记录用量的估算；保留观察到的缓存比例，不含工具等额外费用和税费。")
+        if uncertain_context_tokens:
+            notes.append("部分请求上下文长度不明，采用该模型短、长上下文价格的中点。")
     if not turn_count:
         notes.append("本时段暂无已记录用量。")
         if not partial:
             available["amount"] = True
             if settings.get("pricingMode", "official") == "official":
                 available["credits"] = available["usd"] = True
+            elif settings.get("pricingMode") == "api":
+                available["usd"] = True
     if coverage_gap:
         notes.append("记录尚未读完、读取失败或计数不完整，汇总可能缺少用量。")
     if unassigned:
@@ -172,10 +182,11 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
         "startDate": start.isoformat(), "endDate": end.isoformat(), "status": status,
         "tokens": totals if turn_count or not partial else None,
         **{key: _format(money[key]) if available[key] else None for key in _MONEY_FIELDS},
+        "apiContextUncertainTokens": uncertain_context_tokens, "apiLongContextTokens": long_context_tokens,
         "unpricedTokens": unpriced_tokens, "unpricedTurnCount": unpriced_turns,
         "unassignedTokens": unassigned, "partial": partial, "turnCount": turn_count,
         "models": [
-            {key: group[key] for key in ("model", "label", "tokens", "unpricedTokens", "partial", "turnCount")} |
+            {key: group[key] for key in ("model", "label", "standardRates", "tokens", "unpricedTokens", "apiContextUncertainTokens", "apiLongContextTokens", "partial", "turnCount")} |
             {key: _format(group["money"][key]) if group["available"][key] else None for key in _MONEY_FIELDS}
             for group in sorted(models.values(), key=lambda group: (
                 -group["tokens"]["total"], group["model"] is None, group["model"] or ""))

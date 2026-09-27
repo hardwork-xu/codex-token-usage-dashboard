@@ -32,7 +32,7 @@ CURRENCIES = {"CNY": ("人民币", "¥"), "USD": ("美元", "$"), "HKD": ("港�
 FX_REFERENCE = {"sourceUrl": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html",
                 "date": "2026-09-14", "label": "欧洲央行参考汇率"}
 DEFAULT_SETTINGS = {"currencyName": "美元", "currencySymbol": "$", "ratePerMillion": None,
-                    "pricingMode": "official", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "standard",
+                    "pricingMode": "api", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "standard",
                     "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None}
 EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SubagentStop", "SubagentStart"}
 
@@ -168,7 +168,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.8.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.9.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -241,7 +241,7 @@ def validate_settings(value):
     if renewal_day is not None and (type(renewal_day) is not int or not 1 <= renewal_day <= 31):
         raise ValueError("订阅续费日应为 1 到 31 的整数，或留空")
     out["subscriptionRenewalDay"] = renewal_day
-    for key, choices in (("pricingMode", ("official", "custom")), ("speedMode", ("auto", "standard", "fast"))):
+    for key, choices in (("pricingMode", ("api", "official", "custom")), ("speedMode", ("auto", "standard", "fast"))):
         selected = value.get(key, DEFAULT_SETTINGS[key])
         if selected not in choices:
             raise ValueError("计价方式或速度选项无效")
@@ -488,7 +488,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_titles, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.8.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.9.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -742,7 +742,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.8.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.9.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

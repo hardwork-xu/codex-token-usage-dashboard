@@ -1,7 +1,7 @@
 {
   "name": "codex-usage-meter",
-  "version": "0.8.0",
-  "description": "查看 Codex 每题、当天与订阅周期 Token，区分主子任务，估算 credits 与货币价值",
+  "version": "0.9.0",
+  "description": "查看 Codex 每题、当天与订阅周期 Token，按模型估算 API 等价费用",
   "author": {
     "name": "Codex Usage Meter contributors"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "用量计",
     "shortDescription": "看清每道问题消耗了多少 Token",
-    "longDescription": "通过官方 Hooks 提供的本地记录统计每题、当天与订阅周期用量，区分主子任务，读取官方额度，按模型与 Token 类别估算 credits 并换算货币。",
+    "longDescription": "通过官方 Hooks 提供的本地记录统计每题、当天与订阅周期用量，区分主子任务，读取官方额度，按各模型 API 输入、缓存输入和输出单价估算等价费用，支持人民币、美元和港元。",
     "developerName": "Codex Usage Meter contributors",
     "category": "Productivity",
     "capabilities": [],

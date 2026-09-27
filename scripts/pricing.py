@@ -1,7 +1,7 @@
 """Pure Decimal estimates from observed tokens; never an account charge or balance.
 
-The dated table is the public ChatGPT/Codex credit schedule, not API pricing.
-Only explicitly supported model IDs are matched; aliases are not guessed.
+API replacement costs and the ChatGPT/Codex credit schedule use separate dated
+tables. Only explicitly supported model IDs are matched; aliases are not guessed.
 """
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from typing import Any
 SOURCE_URL = "https://learn.chatgpt.com/docs/pricing"
 SPEED_SOURCE_URL = "https://learn.chatgpt.com/docs/agent-configuration/speed"
 RATE_DATE = "2026-09-27"
+API_SOURCE_URL = "https://developers.openai.com/api/docs/pricing"
+API_RATE_DATE = "2026-09-27"
 _MILLION = Decimal(1_000_000)
 _DISPLAY = Decimal("0.000001")
 _MAX_COUNTER = 10**30
@@ -29,6 +31,21 @@ RATES = {
     "gpt-5.4": ("GPT-5.4", "62.5", "6.25", "375"),
     "gpt-5.4-mini": ("GPT-5.4 mini", "18.75", "1.875", "113"),
 }
+# Standard processing USD per million uncached input / cached input / output.
+# These are independently verified API rates, never credits times a conversion.
+API_RATES = {
+    "gpt-6-astra": ("GPT-6 Astra", "10", "1", "50"),
+    "gpt-6-sol": ("GPT-6 Sol", "2", "0.2", "10"),
+    "gpt-6-luna": ("GPT-6 Luna", "0.1", "0.01", "0.5"),
+    "gpt-5.6-sol": ("GPT-5.6 Sol", "4", "0.4", "20"),
+    "gpt-5.6-terra": ("GPT-5.6 Terra", "2", "0.2", "12"),
+    "gpt-5.6-luna": ("GPT-5.6 Luna", "0.2", "0.02", "1.2"),
+    "gpt-5.5": ("GPT-5.5", "5", "0.5", "30"),
+    "gpt-5.4": ("GPT-5.4", "2.5", "0.25", "15"),
+    "gpt-5.4-mini": ("GPT-5.4 mini", "0.75", "0.075", "4.5"),
+}
+API_LONG_CONTEXT_MODELS = frozenset(API_RATES) - {"gpt-5.4-mini"}
+API_LONG_CONTEXT_THRESHOLD = 272_000
 FAST_MULTIPLIERS = {
     "gpt-6-sol": Decimal("2.5"),
     "gpt-6-luna": Decimal("2.5"),
@@ -62,17 +79,69 @@ def _text(value: Decimal) -> str:
     return format(value.quantize(_DISPLAY, rounding=ROUND_HALF_UP), "f")
 
 
-def _base(turn: dict, official: bool) -> dict:
+def _base(turn: dict, official: bool, *, api: bool = False) -> dict:
     model = turn.get("model") if isinstance(turn.get("model"), str) else None
     return {
         "status": "unavailable", "credits": None, "creditsMax": None,
         "usd": None, "usdMax": None, "amount": None, "amountMax": None,
         "note": "", "model": model,
-        "label": "按官方费率估算" if official else "自定义金额换算",
-        "sourceUrl": SOURCE_URL if official else None,
-        "rateDate": RATE_DATE if official else None,
+        "label": "API 替代成本估算" if api else "按官方费率估算" if official else "自定义金额换算",
+        "sourceUrl": (_api_source(model) if api else SOURCE_URL) if official else None,
+        "rateDate": (API_RATE_DATE if api else RATE_DATE) if official else None,
         "breakdown": None, "estimateBasis": None,
+        "apiContextUncertainTokens": 0, "apiLongContextTokens": 0,
     }
+
+
+def _api_source(model):
+    return "https://developers.openai.com/api/docs/models/" + model if model in API_RATES else API_SOURCE_URL
+
+
+def _api_context(value):
+    return value if isinstance(value, str) and value in {"short", "long", "unknown"} else "unknown"
+
+
+def _price_api(turn, settings, result, incoming, cached, outgoing, total, money_text):
+    """Use upstream per-request/session evidence, never aggregate turn length.
+
+    GPT-5.5/5.4 document a session-wide threshold; callers must supply evidence
+    appropriate to that scope. Missing scope evidence stays unknown. Cache-write
+    counters have already been rejected because their log/API mapping is unproven.
+    """
+    model = result["model"]
+    currency_per_usd = _number(settings.get("currencyPerUsd", "1"))
+    context = _api_context(turn.get("apiContext"))
+    long_supported = model in API_LONG_CONTEXT_MODELS
+    input_multiplier = output_multiplier = Decimal(1)
+    result["estimateBasis"] = "api_standard"
+    notes = ["按各模型 API Standard 文本 Token 单价估算替代成本，不含工具调用等非 Token 费用。"]
+    if long_supported and context == "long":
+        input_multiplier, output_multiplier = Decimal(2), Decimal("1.5")
+        result["estimateBasis"] = "api_long"
+        result["apiLongContextTokens"] = total
+        notes.append("按已确认的长上下文计价。")
+    elif long_supported and context == "unknown":
+        input_multiplier, output_multiplier = Decimal("1.5"), Decimal("1.25")
+        result["estimateBasis"] = "api_context_midpoint"
+        result["apiContextUncertainTokens"] = total
+        notes.append("上下文长度缺少足够证据，按短与长上下文成本的中点估算。")
+    components = {}
+    usd = Decimal(0)
+    for field, count, raw_rate, multiplier in zip(
+        ("uncachedInput", "cachedInput", "output"),
+        (incoming - cached, cached, outgoing), API_RATES[model][1:],
+        (input_multiplier, input_multiplier, output_multiplier),
+    ):
+        component = Decimal(count) * Decimal(raw_rate) * multiplier / _MILLION
+        usd += component
+        components[field] = {"tokens": count, "usdPerMillion": raw_rate,
+                             "contextMultiplier": str(multiplier), "usd": money_text(component)}
+    result.update(usd=money_text(usd), amount=money_text(usd * currency_per_usd))
+    result["breakdown"] = {**components, "processing": "standard", "apiContext": context,
+                           "currencyPerUsd": str(currency_per_usd),
+                           "longContextThreshold": API_LONG_CONTEXT_THRESHOLD if long_supported else None}
+    notes.append("仅用于比较，不代表实际 API 账单。")
+    return _finish(result, turn, notes)
 
 
 def _finish(result: dict, turn: dict, notes: list[str]) -> dict:
@@ -90,19 +159,20 @@ def _finish(result: dict, turn: dict, notes: list[str]) -> dict:
 def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
     """Return a stable, JSON-safe estimate; unknown inputs fail closed.
 
-    `amount` uses the selected currency; `usd` is credits × configured USD per
-    credit. Public max fields are always null. Internally ambiguous speed uses
-    the midpoint of unrounded credit estimates before currency conversion.
-    The default follows the user's confirmed non-Fast mode; explicit auto and
-    Fast remain supported for compatibility. Reasoning effort changes no rate.
+    `amount` uses the selected currency. API mode computes USD directly from
+    separate Standard API token rates and ignores Codex credit/speed settings.
+    Official mode converts credits by configured USD per credit and retains its
+    explicit speed scenarios. Ambiguous API context or legacy speed uses an
+    unrounded midpoint before FX; public max fields stay null. Reasoning effort
+    changes no rate, and reasoning tokens remain a subset of output tokens.
     """
     turn = turn if isinstance(turn, dict) else {}
     settings = settings if isinstance(settings, dict) else {}
     mode = settings.get("pricingMode", "official")
-    result = _base(turn, mode != "custom")
+    result = _base(turn, mode != "custom", api=mode == "api")
     money_text = (lambda value: format(value, "f")) if _unrounded else _text
     try:
-        if not isinstance(mode, str) or mode not in {"official", "custom"}:
+        if not isinstance(mode, str) or mode not in {"official", "custom", "api"}:
             raise ValueError("计价方式无效。")
         tokens = turn.get("tokens")
         if not isinstance(tokens, dict) or turn.get("quality") == "unavailable":
@@ -130,7 +200,7 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
             model = result["model"]
             if model == "gpt-5.3-codex-spark":
                 raise ValueError("Spark 暂无公开数字费率，不能据此估算金额。")
-            if model not in RATES:
+            if model not in (API_RATES if mode == "api" else RATES):
                 raise ValueError("该模型暂无本插件可核实的官方数字费率。")
             incoming = _counter(tokens.get("input"))
             cached = _counter(tokens.get("cachedInput"))
@@ -140,7 +210,12 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
             if cached > incoming or reasoning > outgoing or total != incoming + outgoing:
                 raise ValueError("Token 明细不一致，无法可靠估算。")
             if cache_write:
+                if mode == "api":
+                    raise ValueError("缓存写入 Token 与 API 计价字段的映射尚未核实，暂不估算。")
                 raise ValueError("记录含缓存写入 Token，当前官方费率未明确其计价方式。")
+
+            if mode == "api":
+                return _price_api(turn, settings, result, incoming, cached, outgoing, total, money_text)
 
             speed = settings.get("speedMode", "standard")
             fast = FAST_MULTIPLIERS.get(model)
@@ -202,7 +277,7 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
     except (ValueError, DecimalException) as exc:
         # None of the untrusted numeric/metadata values are interpolated into
         # output. Preserve safe diagnostics while returning no partial totals.
-        result.update(status="unavailable", credits=None, creditsMax=None, usd=None, usdMax=None, amount=None, amountMax=None, breakdown=None, estimateBasis=None)
+        result.update(status="unavailable", credits=None, creditsMax=None, usd=None, usdMax=None, amount=None, amountMax=None, breakdown=None, estimateBasis=None, apiContextUncertainTokens=0, apiLongContextTokens=0)
         result["note"] = str(exc) if isinstance(exc, ValueError) else "换算数值超出可支持范围。"
         return result
 
@@ -255,7 +330,8 @@ def validated_slices(turn):
         model, tier = safe_model(item.get("model")), safe_model(item.get("serviceTier"))
         status = "known" if item.get("pricingMetadataStatus") == "known" and model and tier else "unknown"
         slices.append({"day": day, "model": model, "serviceTier": tier,
-                       "pricingMetadataStatus": status, "tokens": tokens})
+                       "pricingMetadataStatus": status, "tokens": tokens,
+                       "apiContext": _api_context(item.get("apiContext"))})
         bucket = daily.setdefault(day, dict.fromkeys(TOKEN_FIELDS, 0))
         for key in TOKEN_FIELDS:
             summed[key] += tokens[key]
@@ -274,7 +350,24 @@ def validated_slices(turn):
     return slices
 
 
-def _model_groups(parts, turn):
+def standard_rates(model, mode="official"):
+    """Display metadata from the same table used by the estimator, not a second rate table."""
+    rate = (API_RATES if mode == "api" else RATES).get(model)
+    if rate is None:
+        return None
+    metadata = {"uncachedInput": rate[1], "cachedInput": rate[2], "output": rate[3],
+                "unit": "usd_per_million_tokens" if mode == "api" else "credits_per_million_tokens",
+                "rateDate": API_RATE_DATE if mode == "api" else RATE_DATE,
+                "sourceUrl": _api_source(model) if mode == "api" else SOURCE_URL}
+    if mode == "api" and model in API_LONG_CONTEXT_MODELS:
+        metadata.update(longContextThreshold=API_LONG_CONTEXT_THRESHOLD,
+                        longContextInputMultiplier="2", longContextCachedInputMultiplier="2",
+                        longContextOutputMultiplier="1.5",
+                        longContextScope="session" if model in {"gpt-5.5", "gpt-5.4"} else "request")
+    return metadata
+
+
+def _model_groups(parts, turn, mode="official"):
     groups = {}
     for fragment, price in parts:
         tokens = fragment.get("tokens")
@@ -288,8 +381,11 @@ def _model_groups(parts, turn):
         group = groups.setdefault(model, {
             "model": model, "label": RATES[model][0] if model in RATES else model or "未确认模型",
             "tokens": dict.fromkeys(TOKEN_FIELDS, 0), "turnCount": 1, "partial": False,
-            "unpricedTokens": 0, **{key: None for key in MONEY_FIELDS},
+            "unpricedTokens": 0, "apiContextUncertainTokens": 0, "apiLongContextTokens": 0,
+            "standardRates": standard_rates(model, mode), **{key: None for key in MONEY_FIELDS},
         })
+        group["apiContextUncertainTokens"] += price.get("apiContextUncertainTokens", 0)
+        group["apiLongContextTokens"] += price.get("apiLongContextTokens", 0)
         for key in TOKEN_FIELDS:
             group["tokens"][key] += tokens[key]
         group["partial"] |= (turn.get("quality") != "complete" or bool(turn.get("readingIncomplete"))
@@ -310,6 +406,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
     """Price conserved model slices independently; keep the unpriced remainder visible."""
     turn = turn if isinstance(turn, dict) else {}
     settings = settings if isinstance(settings, dict) else {}
+    mode = settings.get("pricingMode", "official")
     invalid = False
     try:
         slices = validated_slices(turn)
@@ -322,7 +419,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
         price = _estimate_single(source, settings)
         with localcontext() as context:
             context.prec = 100
-            price["models"] = _model_groups([(source, price)], source)
+            price["models"] = _model_groups([(source, price)], source, mode)
         price["unpricedTokens"] = sum(group["unpricedTokens"] for group in price["models"])
         if invalid:
             price["note"] = "模型片段校验失败，保留总量并标为未确认模型。 " + price["note"]
@@ -330,7 +427,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
     # Merge days before rounding, but retain different model/tier evidence.
     merged = {}
     for item in slices:
-        key = (item["model"], item["serviceTier"], item["pricingMetadataStatus"])
+        key = (item["model"], item["serviceTier"], item["pricingMetadataStatus"], item["apiContext"])
         source = merged.setdefault(key, {**item, "tokens": dict.fromkeys(TOKEN_FIELDS, 0),
                                         "quality": turn.get("quality"), "status": turn.get("status")})
         for field in TOKEN_FIELDS:
@@ -342,10 +439,12 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
         return price
     with localcontext() as context:
         context.prec = 100
-        groups = _model_groups(parts, turn)
-        price = dict(parts[0][1]) if len(parts) == 1 else _base(turn, settings.get("pricingMode", "official") != "custom")
+        groups = _model_groups(parts, turn, mode)
+        price = dict(parts[0][1]) if len(parts) == 1 else _base(turn, mode != "custom", api=mode == "api")
         price["models"] = groups
         price["unpricedTokens"] = sum(group["unpricedTokens"] for group in groups)
+        price["apiContextUncertainTokens"] = sum(group["apiContextUncertainTokens"] for group in groups)
+        price["apiLongContextTokens"] = sum(group["apiLongContextTokens"] for group in groups)
         if len(parts) == 1:
             for key in MONEY_FIELDS:
                 price[key] = groups[0][key]
@@ -357,4 +456,13 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
                                any(group["partial"] for group in groups) else "estimated")
             price["estimateBasis"] = "slices"
             price["note"] = "按每段记录中的模型与 Token 类别分别估算并相加；未知模型或缺少费率的部分不计入金额。 不代表订阅实际扣款或官方额度占比。"
+            if mode == "api":
+                price["sourceUrl"] = API_SOURCE_URL
+                price["estimateBasis"] = "api_slices"
+                price["note"] = "按各模型 API Standard 文本 Token 费率分别估算替代成本并相加；未知模型或缺少费率的部分不计入金额，不含工具调用等非 Token 费用。"
+                if price["apiContextUncertainTokens"]:
+                    price["note"] += " 上下文长度缺少足够证据的部分按短与长上下文成本的中点估算。"
+                if turn.get("status") == "running":
+                    price["note"] += " 本题仍在运行，这是截至目前的估算。"
+                price["note"] += " 不代表实际 API 账单或订阅扣款。"
         return price

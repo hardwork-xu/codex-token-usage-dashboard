@@ -42,8 +42,8 @@
     <div id="connection-alert" class="connection-alert" role="status" hidden></div>
     <main>
       <section class="period-section" aria-labelledby="period-heading"><div class="period-header"><h2 id="period-heading">全部已登记任务的用量</h2><p class="period-scope">主任务和子任务各计一次 · 不受下方对话选择影响</p></div><div class="period-grid">
-        <article class="card period-card" aria-labelledby="today-heading"><div class="card-top"><h3 id="today-heading">今天</h3><span id="today-badge" class="badge">等待汇总</span></div><p id="today-date" class="period-date">按用量事件的本地日期统计</p><div class="period-values"><div><p class="period-value-label">已记录 Tokens</p><p id="today-tokens" class="period-value mono">—</p></div><div><p id="today-money-label" class="period-value-label">折算价值 · 估算</p><p id="today-amount" class="period-money mono">—</p><p id="today-credits" class="period-credit mono">Credit 尚未提供</p></div></div><section class="period-models" aria-labelledby="today-models-heading"><div class="period-models-header"><h4 id="today-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="today-models" class="model-list" hidden></ul><p id="today-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="today-coverage" class="period-coverage"><p id="today-count">等待统计数据</p><p id="today-note" class="period-note"></p></div></article>
-        <article class="card period-card" aria-labelledby="subscription-heading"><div class="card-top"><h3 id="subscription-heading">当前订阅周期</h3><span id="subscription-badge" class="badge">等待汇总</span></div><p id="subscription-date" class="period-date">按每月续订日划分</p><div class="period-values"><div><p class="period-value-label">已记录 Tokens</p><p id="subscription-tokens" class="period-value mono">—</p></div><div><p id="subscription-money-label" class="period-value-label">折算价值 · 估算</p><p id="subscription-amount" class="period-money mono">—</p><p id="subscription-credits" class="period-credit mono">Credit 尚未提供</p></div></div><section class="period-models" aria-labelledby="subscription-models-heading"><div class="period-models-header"><h4 id="subscription-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="subscription-models" class="model-list" hidden></ul><p id="subscription-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="subscription-coverage" class="period-coverage"><p id="subscription-count">等待统计数据</p><p id="subscription-note" class="period-note"></p><button id="configure-renewal" type="button" class="text-button period-action">设置每月续订日 ↗</button></div></article>
+        <article class="card period-card" aria-labelledby="today-heading"><div class="card-top"><h3 id="today-heading">今天</h3><span id="today-badge" class="badge">等待汇总</span></div><p id="today-date" class="period-date">按用量事件的本地日期统计</p><div class="period-values"><div><p class="period-value-label">已记录 Tokens</p><p id="today-tokens" class="period-value mono">—</p></div><div><p id="today-money-label" class="period-value-label">API 等价费用（估算）</p><p id="today-amount" class="period-money mono">—</p><p id="today-credits" class="period-credit mono" hidden></p><p id="today-pricing-summary" class="model-scope-note"></p></div></div><section class="period-models" aria-labelledby="today-models-heading"><div class="period-models-header"><h4 id="today-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="today-models" class="model-list" hidden></ul><p id="today-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="today-coverage" class="period-coverage"><p id="today-count">等待统计数据</p><p id="today-note" class="period-note"></p></div></article>
+        <article class="card period-card" aria-labelledby="subscription-heading"><div class="card-top"><h3 id="subscription-heading">当前订阅周期</h3><span id="subscription-badge" class="badge">等待汇总</span></div><p id="subscription-date" class="period-date">按每月续订日划分</p><div class="period-values"><div><p class="period-value-label">已记录 Tokens</p><p id="subscription-tokens" class="period-value mono">—</p></div><div><p id="subscription-money-label" class="period-value-label">API 等价费用（估算）</p><p id="subscription-amount" class="period-money mono">—</p><p id="subscription-credits" class="period-credit mono" hidden></p><p id="subscription-pricing-summary" class="model-scope-note"></p></div></div><section class="period-models" aria-labelledby="subscription-models-heading"><div class="period-models-header"><h4 id="subscription-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="subscription-models" class="model-list" hidden></ul><p id="subscription-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="subscription-coverage" class="period-coverage"><p id="subscription-count">等待统计数据</p><p id="subscription-note" class="period-note"></p><button id="configure-renewal" type="button" class="text-button period-action">设置每月续订日 ↗</button></div></article>
       </div><p id="period-unassigned" class="period-unassigned" hidden></p><p class="period-scope" style="margin:9px 3px 0">仅覆盖已登记日志中的用量，按记录中的 model 分组。官方统计还包含自动审阅、标题生成等本地未覆盖的功能。本地 Token 占比不能换算为官方额度或 Credits 占比；金额是估算价值，不是实际扣款。<a class="pricing-source" href="https://chatgpt.com/settings/usage?tab=analytics" target="_blank" rel="noopener noreferrer">查看官方额度分析 ↗</a></p></section>
       <section class="conversation-toolbar" aria-label="选择要查看的对话"><div class="conversation-select-wrap"><label for="conversation-select">正在查看的对话</label><select id="conversation-select" aria-describedby="conversation-filter-note" disabled><option value="">等待对话记录</option></select><p id="conversation-filter-note" class="conversation-toolbar-note">选定后会保持显示这段对话，不会跳到其他正在进行的对话。</p></div><button id="edit-conversation-alias" type="button" class="button conversation-alias-button" disabled>设置别名</button></section>
       <section id="reading-notice" class="reading-notice" aria-labelledby="reading-heading" hidden><p id="reading-identity" class="reading-identity"></p><h2 id="reading-heading" class="reading-heading" role="status">正在补读历史记录</h2><p id="reading-note" class="reading-note"></p><progress id="reading-progress" class="reading-progress" aria-label="历史记录读取进度" aria-describedby="reading-numbers"></progress><p id="reading-numbers" class="reading-numbers mono"></p></section>
@@ -52,12 +52,12 @@
         <div class="grid">
           <article class="card latest"><div class="card-top"><h2 id="latest-heading">最近一次提问</h2><span id="latest-badge" class="badge">等待记录</span></div><div class="latest-identity"><h3 id="latest-conversation-title" class="latest-conversation-title">等待对话记录</h3><div class="latest-conversation-labels"><span id="latest-conversation-id" class="conversation-id" hidden></span><span id="latest-turn-number" class="turn-number"></span></div></div><div class="big-value mono empty" id="latest-total">—<span class="unit">Tokens</span></div><div id="latest-meta" class="turn-meta">产生用量记录后，会显示在这里。</div><div class="token-breakdown"><div class="segments" id="token-segments" role="img" aria-label="尚无 Token 明细"><div class="segment-input" id="segment-input" style="width:0%"></div><div class="segment-output" id="segment-output" style="width:0%"></div></div><div class="breakdown-labels"><div><div class="legend"><span class="legend-dot" aria-hidden="true"></span>输入</div><div id="input-total" class="breakdown-value mono">—</div><p id="input-subset" class="subset">缓存输入属于输入用量</p></div><div><div class="legend"><span class="legend-dot output" aria-hidden="true"></span>输出</div><div id="output-total" class="breakdown-value mono">—</div><p id="output-subset" class="subset">推理输出属于输出用量</p></div></div></div><div id="latest-model-details" hidden></div><p id="quality-note" class="quality-note">只展示数据源实际提供的用量。记录不完整时会明确标注。</p></article>
           <article class="card quota-card"><div class="card-top"><h2>订阅剩余额度</h2><button id="refresh-quota" type="button" class="icon-button" aria-label="刷新订阅额度" title="刷新订阅额度"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.3 7a7 7 0 0 1 11.8-.8L20 9M4 15l1.9 2.8A7 7 0 0 0 17.7 17"/></svg></button></div><div id="quota-container" class="quota-container"><p class="quota-empty">正在读取官方额度…</p></div><p id="quota-error" class="quota-error" hidden></p><div class="quota-footnote"><p>保留官方百分比精度，不推算剩余 Token。</p><p id="quota-updated">更新时间 · 尚无数据</p></div></article>
-          <article class="cost-card" aria-labelledby="pricing-heading"><div><h2 class="cost-label" id="pricing-heading"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4h14v16H5zM8 8h8M8 12h2m4 0h2m-8 4h2m4 0h2"/></svg>按官方费率估算</h2><div id="credit-value" class="credit-value mono">—<span class="credit-unit">Credits</span></div><p id="pricing-context" class="pricing-context">等待用量与模型信息</p></div><div class="cost-right"><p class="estimate-caption">折算价值</p><div id="cost-value" class="cost-value mono">—</div><div id="rate-label" class="rate-label">按当前购买比例折算</div></div><div class="currency-switch"><span class="currency-switch-label">显示货币</span><div class="currency-buttons" role="group" aria-label="切换显示货币"><button type="button" class="currency-chip" data-currency-code="CNY" aria-pressed="false" disabled>人民币</button><button type="button" class="currency-chip" data-currency-code="USD" aria-pressed="true" disabled>美元</button><button type="button" class="currency-chip" data-currency-code="HKD" aria-pressed="false" disabled>港元</button></div></div><div class="cost-explanation"><p class="scope-note">仅本任务已记录用量，子代理未汇总</p><p id="pricing-note" class="pricing-note">官方模式按模型的输入、缓存输入和输出费率估算 Credit。</p><p id="cost-disclaimer" class="cost-disclaimer">用于衡量 Pro 订阅内用量的估算价值，不代表账户实际扣款。</p><p id="fx-reference" class="fx-reference">参考汇率，可修改</p></div></article>
-          <aside class="source-card"><svg class="source-icon" aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8m-4-4v4m-5-9 2 2 4-4"/></svg><div><p class="source-title">计价有据可查</p><p class="source-description">按模型与输入、缓存、输出费率给出一个估算值。暂缺公开费率的模型仍保留 Token 记录。</p><p class="source-date"><a id="pricing-source" class="pricing-source" href="https://learn.chatgpt.com/docs/pricing" target="_blank" rel="noopener noreferrer">官方计价说明 ↗</a><br><span id="pricing-date">费率快照 · 2026-09-14</span></p></div></aside>
+          <article class="cost-card" aria-labelledby="pricing-heading"><div><h2 class="cost-label" id="pricing-heading"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4h14v16H5zM8 8h8M8 12h2m4 0h2m-8 4h2m4 0h2"/></svg>本题 API 等价费用（估算）</h2><div id="credit-value" class="credit-value mono" hidden>—<span class="credit-unit">Credits</span></div><p id="pricing-context" class="pricing-context">等待用量与模型信息</p></div><div class="cost-right"><p id="cost-caption" class="estimate-caption">API 等价费用（估算）</p><div id="cost-value" class="cost-value mono">—</div><div id="rate-label" class="rate-label">API Standard · USD / 百万 Tokens</div></div><div class="currency-switch"><span class="currency-switch-label">显示货币</span><div class="currency-buttons" role="group" aria-label="切换显示货币"><button type="button" class="currency-chip" data-currency-code="CNY" aria-pressed="false" disabled>人民币</button><button type="button" class="currency-chip" data-currency-code="USD" aria-pressed="true" disabled>美元</button><button type="button" class="currency-chip" data-currency-code="HKD" aria-pressed="false" disabled>港元</button></div></div><div class="cost-explanation"><p class="scope-note">仅上方这一题的已记录用量，子代理另列；全部任务合计见顶部周期卡片。</p><p id="pricing-note" class="pricing-note">按各模型的普通输入、缓存输入和输出 API Standard 单价估算。</p><p id="cost-disclaimer" class="cost-disclaimer">仅估算 API Token 费用，不含工具附加费、税费，不是订阅扣款或实际账单。</p><p id="fx-reference" class="fx-reference">参考汇率，可修改</p></div></article>
+          <aside class="source-card"><svg class="source-icon" aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 21h8m-4-4v4m-5-9 2 2 4-4"/></svg><div><p class="source-title">计价有据可查</p><p id="source-description" class="source-description">按各模型的公开 API Standard 单价估算 Token 费用，保留已观察到的缓存命中比例。</p><p class="source-date"><a id="pricing-source" class="pricing-source" href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener noreferrer">官方 API 计价说明 ↗</a><br><span id="pricing-date">费率日期见模型明细</span></p></div></aside>
           <article class="card recent-card"><div class="recent-header"><div><h2 id="recent-heading">此对话的问题用量</h2><p class="recent-subtitle">每根柱子代表这段对话的一次提问 · 最多 12 次</p></div><button type="button" class="text-button" id="view-history">查看记录 →</button></div><div id="recent-plot" class="chart-empty">还没有可展示的用量记录。</div></article>
         </div><p class="overview-bottom"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 10v6m0-10v1"/></svg>Token 计数与订阅额度是两种不同口径，无法据此计算订阅还剩多少 Token。</p>
       </section>
-      <section id="history-panel" class="card history-panel" role="tabpanel" aria-labelledby="history-tab" hidden><div class="history-tools"><div><h2 id="history-heading">最近问题记录</h2><p id="history-filter-description" class="recent-subtitle">按任务查看最近提问的用量。</p></div><p id="history-total" class="history-total">已记录 <strong class="mono">0</strong> 次提问</p></div><div class="table-wrap" id="history-table-wrap" hidden><table><thead><tr><th scope="col">对话 / 提问 / 时间</th><th scope="col">Token 用量</th><th scope="col">记录状态</th><th scope="col">Credit / 金额估算</th></tr></thead><tbody id="history-body"></tbody></table></div><div id="empty-history" class="empty-history"><svg aria-hidden="true" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 3h10a2 2 0 0 1 2 2v16l-4-2-3 2-3-2-4 2V5a2 2 0 0 1 2-2Z"/><path d="M8 8h8m-8 4h5"/></svg><h3>从下一次提问开始</h3><p>当本地统计服务收到用量数据，记录会自动出现在这里。</p></div><p class="history-footnote">列表展示最近记录，同时保留各任务最新一题；顶部周期汇总使用全部已登记记录。“部分记录”仅代表已收到的用量；没有完整起止数据时，不会将其标成完整消耗。Credit 与金额使用当前计价设置，均为单一估算值，不代表实际扣款。每条记录仅覆盖该任务已记录用量，子代理未汇总。</p></section>
+      <section id="history-panel" class="card history-panel" role="tabpanel" aria-labelledby="history-tab" hidden><div class="history-tools"><div><h2 id="history-heading">最近问题记录</h2><p id="history-filter-description" class="recent-subtitle">按任务查看最近提问的用量。</p></div><p id="history-total" class="history-total">已记录 <strong class="mono">0</strong> 次提问</p></div><div class="table-wrap" id="history-table-wrap" hidden><table><thead><tr><th scope="col">对话 / 提问 / 时间</th><th scope="col">Token 用量</th><th scope="col">记录状态</th><th id="history-pricing-heading" scope="col">API 等价费用（估算）</th></tr></thead><tbody id="history-body"></tbody></table></div><div id="empty-history" class="empty-history"><svg aria-hidden="true" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 3h10a2 2 0 0 1 2 2v16l-4-2-3 2-3-2-4 2V5a2 2 0 0 1 2-2Z"/><path d="M8 8h8m-8 4h5"/></svg><h3>从下一次提问开始</h3><p>当本地统计服务收到用量数据，记录会自动出现在这里。</p></div><p class="history-footnote">列表展示最近记录，同时保留各任务最新一题；顶部周期汇总使用全部已登记记录。“部分记录”仅代表已收到的用量；没有完整起止数据时，不会将其标成完整消耗。金额使用当前计价设置；API 模式估算同等 Token 用量的 API 费用，不包含工具附加费、税费，不代表订阅扣款或完整账单。每条记录仅覆盖该任务已记录用量，子代理未汇总。</p></section>
     </main>
     <footer class="footer"><span class="footer-brand">用量计 / 个人插件</span><span class="footer-local"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/></svg>本地面板 · <span id="last-seen">等待数据</span></span></footer>
   </div>
@@ -65,19 +65,19 @@
     <form id="settings-form">
       <div class="dialog-body">
         <div class="dialog-header"><h2 id="settings-heading">计价与货币设置</h2><button type="button" id="close-settings" class="icon-button" aria-label="关闭设置"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
-        <p class="dialog-description">用官方 Credit 费率衡量每道问题的用量，再按你的购买比例与货币单位折算。结果是估算价值，不是订阅实际扣款。</p>
-        <div class="field settings-mode"><label for="pricing-mode">计价方式</label><select id="pricing-mode" name="pricingMode"><option value="official">官方 Credit 费率（推荐）</option><option value="custom">自定义每百万 Token 价值</option></select></div>
+        <p class="dialog-description">默认估算：如果相同模型和已记录 Token 用量改用 API Standard，按已观察到的缓存命中比例需要多少费用。也可选择原有 Credit 折算或自定义单价。</p>
+        <div class="field settings-mode"><label for="pricing-mode">计价方式</label><select id="pricing-mode" name="pricingMode"><option value="api">API 等价费用（推荐）</option><option value="official">订阅 Credit 参考价值</option><option value="custom">自定义每百万 Token 价值</option></select></div>
         <div class="settings-currency"><label id="settings-currency-label">显示货币</label><input id="currency-code" name="currencyCode" type="hidden" value="USD"><div class="currency-buttons" role="group" aria-labelledby="settings-currency-label"><button type="button" class="currency-chip" data-settings-currency="CNY" aria-pressed="false">人民币</button><button type="button" class="currency-chip" data-settings-currency="USD" aria-pressed="true">美元</button><button type="button" class="currency-chip" data-settings-currency="HKD" aria-pressed="false">港元</button><button type="button" class="currency-chip" data-settings-currency="CUSTOM" aria-pressed="false">自定义单位</button></div></div>
         <div id="custom-currency-fields" class="custom-currency-fields" hidden><div class="form-row"><div class="field"><label for="currency-name">货币 / 单位名称</label><input id="currency-name" name="currencyName" maxlength="24" placeholder="例如：积分" autocomplete="off"></div><div class="field"><label for="currency-symbol">显示符号</label><input id="currency-symbol" name="currencySymbol" maxlength="8" placeholder="自定义符号" autocomplete="off"></div></div><div id="custom-exchange-field" class="field"><label for="currency-per-usd">1 美元折合多少自定义单位</label><input id="currency-per-usd" name="currencyPerUsd" type="text" inputmode="decimal" placeholder="填写你的换算值" autocomplete="off"></div></div>
         <div id="official-settings" class="settings-section">
-          <div class="field"><label for="usd-per-credit">每 Credit 的美元价值</label><input id="usd-per-credit" name="usdPerCredit" type="text" inputmode="decimal" placeholder="0.04" autocomplete="off" aria-describedby="credit-price-hint"></div>
-          <p id="credit-price-hint" class="field-hint">默认 $0.04 / Credit，即 2,500 Credits = $100。可按自己的购买比例修改。</p>
+          <div id="credit-conversion-settings" hidden><div class="field"><label for="usd-per-credit">每 Credit 的美元价值</label><input id="usd-per-credit" name="usdPerCredit" type="text" inputmode="decimal" placeholder="0.04" autocomplete="off" aria-describedby="credit-price-hint"></div>
+          <p id="credit-price-hint" class="field-hint">默认 $0.04 / Credit，即 2,500 Credits = $100。仅用于 Credit 参考价值模式，不影响 API 等价费用。</p></div>
           <div class="form-row"><div class="field"><label for="exchange-cny">1 美元折合人民币</label><input id="exchange-cny" name="exchangeCNY" type="text" inputmode="decimal" placeholder="参考汇率" autocomplete="off" aria-describedby="exchange-hint"></div><div class="field"><label for="exchange-hkd">1 美元折合港元</label><input id="exchange-hkd" name="exchangeHKD" type="text" inputmode="decimal" placeholder="参考汇率" autocomplete="off" aria-describedby="exchange-hint"></div></div>
           <p id="exchange-hint" class="field-hint">参考汇率，可修改。美元换算值固定为 1；页面不会自动查询或更新汇率。</p>
         </div>
         <div id="custom-settings" class="settings-section" hidden><div class="field"><label for="rate-per-million">每 100 万 Token 的折算值</label><input id="rate-per-million" name="ratePerMillion" type="text" inputmode="decimal" placeholder="留空则关闭自定义金额显示" autocomplete="off" aria-describedby="rate-hint"><p id="rate-hint" class="field-hint">按总 Token 统一折算，不区分模型、缓存或输出费率。数值使用上方的货币单位。</p></div></div>
         <div class="renewal-settings"><label for="subscription-renewal-day">每月续订日</label><input id="subscription-renewal-day" name="subscriptionRenewalDay" type="text" inputmode="numeric" maxlength="2" placeholder="填写 1 至 31，留空则不统计订阅周期" autocomplete="off" aria-describedby="renewal-hint"><p id="renewal-hint" class="field-hint">填写订阅每月续订的日期。周期从当天开始，到下次续订日前结束；当月没有这一天时按月末计算。这里只调整统计范围，不会修改你的订阅。</p></div>
-        <div id="calculation-note" class="calculation-note">估算金额 = 模型用量对应的 Credits × 每 Credit 美元价值 × 货币换算值<br>历史记录也会按当前设置重新展示。</div>
+        <div id="calculation-note" class="calculation-note">API 等价费用 = 各模型的普通输入、缓存输入、输出分别乘以 API 单价后相加，再换算货币。不使用每 Credit 的换算比例。</div>
         <p id="settings-error" class="dialog-error" role="alert" hidden></p>
       </div>
       <div class="dialog-actions"><button type="button" id="cancel-settings" class="button">取消</button><button type="submit" id="save-settings" class="button primary">保存设置</button></div>
@@ -187,7 +187,11 @@
   }
   const isDecimal = value => typeof value === 'string' && /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value);
   const positiveDecimal = value => isDecimal(value) && /[1-9]/.test(value);
-  const officialMode = () => state?.settings?.pricingMode !== 'custom';
+  const pricingMode = () => state?.settings?.pricingMode || 'api';
+  const apiMode = () => pricingMode() === 'api';
+  const officialMode = () => pricingMode() === 'official';
+  const customMode = () => pricingMode() === 'custom';
+  function officialSource(value) { try { const url = new URL(value); if (url.protocol === 'https:' && (url.hostname === 'learn.chatgpt.com' || url.hostname === 'openai.com' || url.hostname.endsWith('.openai.com'))) return url.href; } catch {} return null; }
   const presetCurrencies = {CNY:{name:'人民币',symbol:'¥'},USD:{name:'美元',symbol:'$'},HKD:{name:'港元',symbol:'HK$'}};
   function currencyCode() { const s = state?.settings || {}; return s.currencyCode || (s.currencyName === '人民币' ? 'CNY' : s.currencyName === '港元' ? 'HKD' : s.currencyName === '美元' || !s.currencyName ? 'USD' : 'CUSTOM'); }
   function rawDecimal(value) { if (value === null || value === undefined) return null; const raw = String(value); if (!isDecimal(raw)) return null; return raw.includes('.') ? raw.replace(/0+$/,'').replace(/\.$/,'') : raw; }
@@ -210,8 +214,8 @@
   function moneyValue(turn) { const p = turn?.pricing; return singleValue(p ? p.amount : turn?.amount,p?.amountMax); }
   function amountText(turn, detailed = false) {
     const s = state?.settings || {}, value = moneyValue(turn);
-    if (!officialMode() && (s.ratePerMillion === null || s.ratePerMillion === undefined || s.ratePerMillion === '')) return '未设置单价';
-    if (value === null) return turn && officialMode() ? '暂无估价' : '—';
+    if (customMode() && (s.ratePerMillion === null || s.ratePerMillion === undefined || s.ratePerMillion === '')) return '未设置单价';
+    if (value === null) return turn && !customMode() ? '暂无估价' : '—';
     const amount = detailed ? value : decimalText(value,true);
     return (s.currencySymbol ?? '$') + amount + (s.currencySymbol === '' && s.currencyName ? ' ' + s.currencyName : '');
   }
@@ -244,13 +248,29 @@
       if (share) { const track = node('div','model-share-track'), fill = node('div','model-share-fill'); track.setAttribute('aria-hidden','true'); fill.style.width = share.percent + '%'; track.append(fill); row.append(track); }
       const details = [];
       if (officialMode() && rawDecimal(entry.credits) !== null) details.push(decimalText(entry.credits) + ' Credits');
-      details.push(amountText({amount:entry.amount}) + (rawDecimal(entry.amount) !== null ? '（估算）' : ''));
+      details.push((apiMode() ? 'API 等价费用（估算） ' : '') + amountText({amount:entry.amount}) + (!apiMode() && rawDecimal(entry.amount) !== null ? '（估算）' : ''));
       if (showTurnCount && validNumber(entry.turnCount)) details.push(fmt(entry.turnCount) + ' 次提问');
       const detail = node('p','model-details mono',details.join(' · '));
       if (rawDecimal(entry.amount) !== null) detail.title = '估算值 ' + amountText({amount:entry.amount},true);
       row.append(detail);
+      const usage = entry.tokens;
+      if (usage && ['input','cachedInput','output'].every(key => validNumber(usage[key])) && usage.cachedInput <= usage.input) {
+        row.append(node('p','model-details mono','普通输入 ' + fmt(usage.input - usage.cachedInput) + ' · 缓存输入 ' + fmt(usage.cachedInput) + ' · 输出 ' + fmt(usage.output)));
+      }
+      const rates = entry.standardRates;
+      if ((apiMode() && rates?.unit === 'usd_per_million_tokens' || officialMode() && rates?.unit === 'credits_per_million_tokens') && ['uncachedInput','cachedInput','output'].every(key => rawDecimal(rates[key]) !== null)) {
+        row.append(node('p','model-details',(apiMode() ? 'API ' : '') + 'Standard 基准单价（' + (apiMode() ? 'USD' : 'Credits') + ' / 百万 Tokens）：普通输入 ' + decimalText(rates.uncachedInput) + ' · 缓存输入 ' + decimalText(rates.cachedInput) + ' · 输出 ' + decimalText(rates.output)));
+        if (apiMode()) {
+          const source = node('p','model-details',rates.rateDate ? '费率快照 · ' + rates.rateDate : '');
+          const url = officialSource(rates.sourceUrl);
+          if (url) { const link = node('a','pricing-source','API 单价来源 ↗'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; if (rates.rateDate) source.append(document.createTextNode(' · ')); source.append(link); }
+          if (source.textContent) row.append(source);
+        }
+      }
       const notes = []; if (entry.partial) notes.push('部分统计');
       if (validNumber(entry.unpricedTokens) && entry.unpricedTokens > 0) notes.push(fmt(entry.unpricedTokens) + ' Tokens 未计价' + (rawDecimal(entry.amount) !== null ? '，金额仅含可计价部分' : ''));
+      if (apiMode() && validNumber(entry.apiLongContextTokens) && entry.apiLongContextTokens > 0) notes.push(fmt(entry.apiLongContextTokens) + ' Tokens 使用长上下文档位：普通输入、缓存输入为基准单价的 2 倍，输出为 1.5 倍');
+      if (apiMode() && validNumber(entry.apiContextUncertainTokens) && entry.apiContextUncertainTokens > 0) notes.push(fmt(entry.apiContextUncertainTokens) + ' Tokens 的请求／会话上下文未确认，费用取短、长上下文估算的中点');
       if (notes.length) row.append(node('p','model-coverage',notes.join(' · ')));
       list.append(row);
     }
@@ -283,8 +303,17 @@
       text(key + '-date',needsConfiguration ? '设置每月续订日后显示统计范围' : period?.startDate && period?.endDate ? key === 'today' ? period.startDate + ' · 本地日期' : period.startDate + ' 至 ' + period.endDate + '（不含结束日）' : '统计日期暂不可用');
       text(key + '-tokens',unavailable ? '—' : fmt(period.tokens?.total));
       const amount = $(key + '-amount'); amount.textContent = unavailable ? '—' : amountText({amount:period.amount}); amount.title = !unavailable && rawDecimal(period.amount) !== null ? '估算值 ' + amountText({amount:period.amount},true) : '';
-      text(key + '-money-label',unpriced ? '可计价部分 · 估算' : '折算价值 · 估算');
-      text(key + '-credits',unavailable ? 'Credit 尚未提供' : !officialMode() ? '按自定义 Token 单价折算' : rawDecimal(period.credits) === null ? 'Credit 暂不可用' : decimalText(period.credits) + ' Credits（估算）');
+      text(key + '-money-label',apiMode() ? 'API 等价费用（估算）' + (unpriced ? ' · 可计价部分' : '') : officialMode() ? '各模型 Credit 参考价值合计 · 估算' : '自定义折算价值 · 估算');
+      const pricedModels = modelEntries(period)?.filter(entry => rawDecimal(entry.amount) !== null) || [];
+      let pricingSummary = unavailable ? '' : customMode() ? '按设置的统一自定义 Token 单价换算。' : !pricedModels.length ? '暂无可合计的模型金额。' : pricedModels.length === 1 ? '当前可计价部分按 ' + modelLabel(pricedModels[0]) + ' 的费率计算。' : '由 ' + fmt(pricedModels.length) + ' 个模型按各自费率计算后相加。';
+      if (!unavailable && !customMode() && unpriced) pricingSummary += ' 未计价部分不套用其他模型费率。';
+      if (!unavailable && apiMode()) pricingSummary += ' 按 API Standard 与已观察到的缓存命中比例估算，不含工具附加费、税费，不是订阅扣款。';
+      if (!unavailable && officialMode()) pricingSummary += ' 这是按公开 Credits 费率折算的参考价值，不是订阅实付或额外扣款。';
+      if (!unavailable && apiMode() && validNumber(period.apiLongContextTokens) && period.apiLongContextTokens > 0) pricingSummary += ' 其中 ' + fmt(period.apiLongContextTokens) + ' Tokens 使用长上下文档位，倍率见模型明细。';
+      if (!unavailable && apiMode() && validNumber(period.apiContextUncertainTokens) && period.apiContextUncertainTokens > 0) pricingSummary += ' ' + fmt(period.apiContextUncertainTokens) + ' Tokens 的请求／会话上下文未确认，费用取短、长上下文估算的中点。';
+      text(key + '-pricing-summary',pricingSummary);
+      $(key + '-credits').hidden = !officialMode();
+      text(key + '-credits',!officialMode() ? '' : unavailable ? 'Credit 尚未提供' : rawDecimal(period.credits) === null ? 'Credit 暂不可用' : decimalText(period.credits) + ' Credits（估算）');
       text(key + '-count',needsConfiguration ? '请先填写订阅每月续订的日期。' : unavailable ? '当前没有可用的周期汇总。' : validNumber(period.turnCount) ? '已记录 ' + fmt(period.turnCount) + ' 次任务提问' : '提问数量暂不可用');
       const notes = [];
       if (partial) notes.push('当前为部分统计，用量或金额可能尚未补齐。');
@@ -298,50 +327,58 @@
     $('period-unassigned').hidden = unassigned === 0; text('period-unassigned',unassigned > 0 ? '另有 ' + fmt(unassigned) + ' Tokens 缺少可用的事件日期，未计入以上周期。' : '');
     text('configure-renewal',renewalDay === null ? '设置每月续订日 ↗' : '每月 ' + renewalDay + ' 日续订 · 修改 ↗'); $('configure-renewal').disabled = !connected;
   }
-  function usesMidpoint(turn) { const p = turn?.pricing; return p?.estimateBasis === 'midpoint' || (rawDecimal(p?.credits) !== null && rawDecimal(p?.creditsMax) !== null && rawDecimal(p.credits) !== rawDecimal(p.creditsMax)); }
+  function usesMidpoint(turn) { const p = turn?.pricing; return ['midpoint','api_context_midpoint'].includes(p?.estimateBasis) || apiMode() && validNumber(p?.apiContextUncertainTokens) && p.apiContextUncertainTokens > 0 || (rawDecimal(p?.credits) !== null && rawDecimal(p?.creditsMax) !== null && rawDecimal(p.credits) !== rawDecimal(p.creditsMax)); }
   function pricingCaption(turn) {
     const p = turn?.pricing;
     const incomplete = readState(conversationForTurn(turn)).incomplete;
-    if (!officialMode()) return incomplete ? '自定义折算 · 尚未补齐' : '自定义总 Token 折算';
+    if (customMode()) return incomplete ? '自定义折算 · 尚未补齐' : '自定义总 Token 折算';
     if (!p || p.status === 'unavailable') return '暂无估价';
+    if (apiMode()) return 'API 等价费用（估算）' + (incomplete ? ' · 尚未补齐' : usesMidpoint(turn) ? ' · 上下文未确认，取中点' : p.status === 'partial' || turn?.quality === 'partial' || isRunning(turn) ? ' · 已记录部分' : '');
     if (incomplete) return '已记录估算 · 尚未补齐';
     if (usesMidpoint(turn)) return '以中间值给出单一估算';
     return p.status === 'partial' || turn?.quality === 'partial' || isRunning(turn) ? '按已记录用量估算' : '按官方费率估算';
   }
   function renderCurrencyButtons() {
-    const active = currencyCode(), custom = !officialMode();
+    const active = currencyCode(), custom = customMode();
     document.querySelectorAll('[data-currency-code]').forEach(button => { button.setAttribute('aria-pressed',String(button.dataset.currencyCode === active)); button.disabled = currencySaving || !connected || custom; button.title = custom ? '自定义单价按所填单位计价' : ''; });
     document.querySelector('.currency-switch').setAttribute('aria-busy',String(currencySaving));
     document.querySelector('.currency-switch-label').textContent = custom ? '自定义单价按所填单位计价' : '显示货币';
   }
   function renderFxReference() {
-    const container = $('fx-reference'), reference = state?.fxReference; container.replaceChildren(); container.hidden = !officialMode();
+    const container = $('fx-reference'), reference = state?.fxReference; container.replaceChildren(); container.hidden = customMode();
     container.append(document.createTextNode(reference?.customized ? '汇率已手动修改，可继续调整' : '参考汇率，可修改'));
     if (reference?.date) container.append(document.createTextNode(' · ' + reference.date));
     try { const url = new URL(reference?.sourceUrl); if (url.protocol === 'https:') { const link = node('a','pricing-source',(reference.customized ? '原参考：' : '') + (reference.label || '汇率来源') + ' ↗'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; container.append(document.createTextNode(' · '),link); } } catch {}
   }
   function renderPricing(turn, conversation) {
-    const settings = state?.settings || {}, price = turn?.pricing, official = officialMode(), credits = $('credit-value'), reading = readState(conversation), partial = reading.incomplete || turn?.quality === 'partial' || price?.status === 'partial' || isRunning(turn);
-    text('pricing-heading',official ? '按官方费率估算' : '按自定义比例折算');
+    const settings = state?.settings || {}, price = turn?.pricing, api = apiMode(), official = officialMode(), credits = $('credit-value'), reading = readState(conversation), partial = reading.incomplete || turn?.quality === 'partial' || price?.status === 'partial' || isRunning(turn);
+    text('pricing-heading',api ? '本题 API 等价费用（估算）' : official ? '本题 Credit 参考价值 · 按模型计价' : '本题计价 · 自定义比例');
+    credits.hidden = api;
     credits.replaceChildren(document.createTextNode(official ? creditText(turn) : '自定义'),node('span','credit-unit',official ? 'Credits' : '总 Token 比例'));
     credits.title = official && creditValue(turn) !== null ? creditValue(turn) + ' Credits（估算）' : '';
+    text('cost-caption',api ? partial ? '仅本题 · 已可计价部分' : '仅本题 · 估算金额' : '折算价值');
     text('cost-value',amountText(turn)); $('cost-value').title = moneyValue(turn) !== null ? '估算值 ' + amountText(turn,true) : ''; $('cost-value').classList.toggle('unavailable',moneyValue(turn) === null);
     text('pricing-context',turn ? turnModelLabel(turn) + ' · ' + pricingCaption(turn) : reading.error ? '历史记录读取异常，估算尚未就绪' : reading.pending ? '正在补读用量与模型信息' : '等待用量与模型信息');
     const rate = settings.ratePerMillion;
-    if (official) text('rate-label','$' + (settings.usdPerCredit || '0.04') + ' / Credit' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
+    if (api) text('rate-label','API Standard · USD / 百万 Tokens' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
+    else if (official) text('rate-label','$' + (settings.usdPerCredit || '0.04') + ' / Credit' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
     else if (rate === null || rate === undefined || rate === '') { const button = node('button','text-button','设置换算比例 ↗'); button.type = 'button'; button.addEventListener('click',openSettings); $('rate-label').replaceChildren(button); }
     else text('rate-label',(settings.currencySymbol || '') + rate + (settings.currencySymbol ? '' : ' ' + (settings.currencyName || '')) + ' / 百万 Token');
-    let note = official ? '按模型的输入、缓存输入和输出费率给出一个估算值。' : '按已记录的总 Token 与自定义比例折算；不使用官方 Credit 费率。';
-    if (official && price?.status === 'unavailable') note = '当前用量暂无可用的 Credit 估价；Token 记录照常保留。';
+    let note = api ? '假设相同模型、相同 Token 用量与已观察到的缓存命中比例，按公开 API Standard 单价估算。' : official ? '按模型的输入、缓存输入和输出费率给出一个估算值。' : '按已记录的总 Token 与自定义比例折算；不使用官方 Credit 费率。';
+    if (api) {
+      if (price?.status === 'unavailable') note = '当前用量暂无可用的 API 估价；未确认模型或缺少费率的部分只保留 Token，不套用其他模型单价。';
+      if (validNumber(price?.apiLongContextTokens) && price.apiLongContextTokens > 0) note += ' ' + fmt(price.apiLongContextTokens) + ' Tokens 使用长上下文档位：输入与缓存为基准单价的 2 倍，输出为 1.5 倍。';
+      if (usesMidpoint(turn)) note += ' ' + (validNumber(price?.apiContextUncertainTokens) ? fmt(price.apiContextUncertainTokens) + ' Tokens 的' : '') + '请求／会话上下文未确认，费用取短、长上下文估算的中点。';
+    } else if (official && price?.status === 'unavailable') note = '当前用量暂无可用的 Credit 估价；Token 记录照常保留。';
     else if (official && usesMidpoint(turn)) note = '根据现有计价信息取中间值，显示一个估算金额。';
     else if (typeof price?.note === 'string' && !/fast|区间|[–～~]/i.test(price.note)) note = price.note;
     if (reading.incomplete) note = '历史记录尚未补齐，当前估算可能继续变化。' + note;
     text('pricing-note',note); $('pricing-note').classList.toggle('attention',reading.incomplete || !!price && (partial || price.status === 'unavailable'));
-    text('cost-disclaimer',(partial ? '仅按已记录用量估算，记录可能不完整。' : '') + (official ? '用于衡量 Pro 订阅内用量，不代表账户实际扣款。' : '自定义折算，不是实际扣款；历史记录随当前比例重新展示。'));
-    let sourceUrl = 'https://learn.chatgpt.com/docs/pricing';
-    try { const candidate = new URL(price?.sourceUrl); if (candidate.protocol === 'https:' && (candidate.hostname === 'learn.chatgpt.com' || candidate.hostname === 'openai.com' || candidate.hostname.endsWith('.openai.com'))) sourceUrl = candidate.href; } catch {}
-    $('pricing-source').href = sourceUrl;
-    text('pricing-date','费率快照 · ' + (price?.rateDate || '2026-09-14'));
+    text('cost-disclaimer',(partial ? '仅按已记录用量估算，记录可能不完整。' : '') + (api ? '仅估算 API Token 费用，不含工具附加费、税费；不是订阅扣款、实际账单或节省金额。' : official ? '用于衡量 Pro 订阅内用量，不代表账户实际扣款。' : '自定义折算，不是实际扣款；历史记录随当前比例重新展示。'));
+    $('pricing-source').href = officialSource(price?.sourceUrl) || (api ? 'https://developers.openai.com/api/docs/pricing' : 'https://learn.chatgpt.com/docs/pricing');
+    text('pricing-source',api ? '官方 API 计价说明 ↗' : '官方 Codex 计价说明 ↗');
+    text('source-description',api ? '按各模型的公开 API Standard 单价分别估算；模型明细列出普通输入、缓存输入和输出的 USD / 百万 Tokens 基准单价。' : '按模型与输入、缓存、输出费率给出一个估算值。暂缺公开费率的模型仍保留 Token 记录。');
+    text('pricing-date',price?.rateDate ? '费率快照 · ' + price.rateDate : '费率日期见模型明细');
     renderCurrencyButtons(); renderFxReference();
   }
   function renderLatest(list) {
@@ -394,6 +431,7 @@
     const current = conversations().find(c => c.id === selectedConversationId) || selectedConversationSnapshot, focusedTurn = document.activeElement?.dataset?.historyTurn, focusedModel = document.activeElement?.dataset?.modelDetails;
     const relevant = historyAll ? conversations() : [current], incomplete = relevant.some(c => readState(c).incomplete), readingError = relevant.some(c => readState(c).error);
     text('history-heading',historyAll ? '最近问题记录 · 全部任务' : '最近问题记录');
+    text('history-pricing-heading',apiMode() ? 'API 等价费用（估算）' : officialMode() ? 'Credit / 参考价值估算' : '自定义金额估算');
     text('history-filter-description',historyAll ? '显示各任务的最近记录，保留每个任务最新一题；点击标题可单独查看。顶部周期汇总仍使用全部已登记记录。' : current ? current.title + ' · ' + current.displayId + ' · 仅显示此任务的最近记录，保留最新一题' : '等待任务记录');
     const total = $('history-total'); total.replaceChildren(document.createTextNode('当前显示 '),node('strong','mono',fmt(list.length)),document.createTextNode(' 次提问'));
     if (incomplete) total.append(node('span','history-total-note','历史记录尚未补齐'));
@@ -437,17 +475,17 @@
   function showToast(message) { text('toast',message); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; },3500); }
   function fullSettings() {
     const s = state?.settings || {};
-    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'official',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:'standard',subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
+    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:'standard',subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
   }
   function toggleCurrencyFields() {
-    const code = $('currency-code').value, official = $('pricing-mode').value === 'official';
-    $('custom-currency-fields').hidden = code !== 'CUSTOM'; $('custom-exchange-field').hidden = !official; $('currency-name').required = code === 'CUSTOM';
-    document.querySelectorAll('[data-settings-currency]').forEach(button => { button.setAttribute('aria-pressed',String(button.dataset.settingsCurrency === code)); button.disabled = !official && button.dataset.settingsCurrency !== 'CUSTOM'; });
+    const code = $('currency-code').value, custom = $('pricing-mode').value === 'custom';
+    $('custom-currency-fields').hidden = code !== 'CUSTOM'; $('custom-exchange-field').hidden = custom; $('currency-name').required = code === 'CUSTOM';
+    document.querySelectorAll('[data-settings-currency]').forEach(button => { button.setAttribute('aria-pressed',String(button.dataset.settingsCurrency === code)); button.disabled = custom && button.dataset.settingsCurrency !== 'CUSTOM'; });
   }
   function togglePricingFields() {
-    const official = $('pricing-mode').value === 'official'; $('official-settings').hidden = !official; $('custom-settings').hidden = official;
-    if (!official) $('currency-code').value = 'CUSTOM'; toggleCurrencyFields();
-    text('calculation-note',official ? '估算金额 = 模型用量对应的 Credits × 每 Credit 美元价值 × 货币换算值。历史记录也会按当前设置重新展示。' : '估算金额 = 已记录总 Token ÷ 1,000,000 × 自定义比例。单价按所填单位计价，不随货币按钮换算。');
+    const mode = $('pricing-mode').value, custom = mode === 'custom'; $('official-settings').hidden = custom; $('credit-conversion-settings').hidden = mode !== 'official'; $('custom-settings').hidden = !custom;
+    if (custom) $('currency-code').value = 'CUSTOM'; toggleCurrencyFields();
+    text('calculation-note',mode === 'api' ? 'API 等价费用 = 各模型的普通输入、缓存输入、输出分别乘以 API Standard 单价后相加，再换算货币。保留已观察到的缓存命中比例，不使用 Credit 购买比例，不含工具附加费与税费。' : mode === 'official' ? '估算金额 = 模型用量对应的 Credits × 每 Credit 美元价值 × 货币换算值。历史记录也会按当前设置重新展示。' : '估算金额 = 已记录总 Token ÷ 1,000,000 × 自定义比例。单价按所填单位计价，不随货币按钮换算。');
   }
   function openSettings() {
     const settings = fullSettings(); $('currency-name').value = settings.currencyName; $('currency-symbol').value = settings.currencySymbol; $('rate-per-million').value = settings.ratePerMillion ?? ''; $('pricing-mode').value = settings.pricingMode; $('currency-code').value = settings.currencyCode; $('usd-per-credit').value = settings.usdPerCredit; $('currency-per-usd').value = settings.currencyPerUsd; $('exchange-cny').value = settings.exchangeRates.CNY; $('exchange-hkd').value = settings.exchangeRates.HKD; $('subscription-renewal-day').value = settings.subscriptionRenewalDay ?? ''; togglePricingFields(); $('settings-error').hidden = true; $('settings-dialog').showModal();
@@ -472,7 +510,7 @@
   $('configure-renewal').addEventListener('click',() => { openSettings(); $('subscription-renewal-day').focus(); });
   document.querySelectorAll('[data-settings-currency]').forEach(button => button.addEventListener('click',() => { $('currency-code').value = button.dataset.settingsCurrency; toggleCurrencyFields(); }));
   document.querySelectorAll('[data-currency-code]').forEach(button => button.addEventListener('click',async () => {
-    const code = button.dataset.currencyCode; if (currencySaving || !state?.csrfToken || !officialMode() || code === currencyCode()) return;
+    const code = button.dataset.currencyCode; if (currencySaving || !state?.csrfToken || customMode() || code === currencyCode()) return;
     currencySaving = true; renderCurrencyButtons();
     try { const settings = fullSettings(); settings.currencyCode = code; await request('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Meter-Token':state.csrfToken},body:JSON.stringify(settings)}); await refreshAfterSettings(); showToast('显示货币已切换为' + presetCurrencies[code].name); }
     catch (error) { showToast(error.message || '货币切换失败，请重试。'); }
@@ -480,16 +518,17 @@
   }));
   $('settings-form').addEventListener('submit',async event => {
     event.preventDefault();
-    const submitted = fullSettings(), official = $('pricing-mode').value === 'official', code = official ? $('currency-code').value : 'CUSTOM', rate = $('rate-per-million').value.trim(), renewal = $('subscription-renewal-day').value.trim();
-    submitted.pricingMode = official ? 'official' : 'custom'; submitted.currencyCode = code;
-    submitted.ratePerMillion = official ? (isDecimal(rate) ? rate : submitted.ratePerMillion) : (rate || null);
-    if (official) { submitted.usdPerCredit = $('usd-per-credit').value.trim(); submitted.exchangeRates = {CNY:$('exchange-cny').value.trim(),USD:'1',HKD:$('exchange-hkd').value.trim()}; }
-    if (code === 'CUSTOM') { submitted.currencyName = $('currency-name').value.trim(); submitted.currencySymbol = $('currency-symbol').value.trim(); if (official) submitted.currencyPerUsd = $('currency-per-usd').value.trim(); }
+    const submitted = fullSettings(), mode = $('pricing-mode').value, official = mode === 'official', custom = mode === 'custom', code = custom ? 'CUSTOM' : $('currency-code').value, rate = $('rate-per-million').value.trim(), renewal = $('subscription-renewal-day').value.trim();
+    submitted.pricingMode = mode; submitted.currencyCode = code;
+    if (custom) submitted.ratePerMillion = rate || null;
+    if (official) submitted.usdPerCredit = $('usd-per-credit').value.trim();
+    if (!custom) submitted.exchangeRates = {CNY:$('exchange-cny').value.trim(),USD:'1',HKD:$('exchange-hkd').value.trim()};
+    if (code === 'CUSTOM') { submitted.currencyName = $('currency-name').value.trim(); submitted.currencySymbol = $('currency-symbol').value.trim(); if (!custom) submitted.currencyPerUsd = $('currency-per-usd').value.trim(); }
     else { submitted.currencyName = presetCurrencies[code].name; submitted.currencySymbol = presetCurrencies[code].symbol; submitted.currencyPerUsd = submitted.exchangeRates[code]; }
     $('settings-error').hidden = true;
     if (renewal !== '' && (!/^\d{1,2}$/.test(renewal) || !validRenewalDay(Number(renewal)))) { text('settings-error','每月续订日请填写 1 至 31 的整数，或留空。'); $('settings-error').hidden = false; return; }
     submitted.subscriptionRenewalDay = renewal === '' ? null : Number(renewal);
-    if (!submitted.currencyName || (!official && rate !== '' && !isDecimal(rate)) || (official && (!positiveDecimal(submitted.usdPerCredit) || !positiveDecimal(submitted.currencyPerUsd) || !positiveDecimal(submitted.exchangeRates.CNY) || !positiveDecimal(submitted.exchangeRates.HKD)))) { text('settings-error',official ? '请填写货币名称，并为 Credit 单价及汇率填写大于零的数字。' : '请填写单位名称，并输入非负数字作为自定义比例。'); $('settings-error').hidden = false; return; }
+    if (!['api','official','custom'].includes(mode) || !submitted.currencyName || (custom && rate !== '' && !isDecimal(rate)) || (official && !positiveDecimal(submitted.usdPerCredit)) || (!custom && (!positiveDecimal(submitted.currencyPerUsd) || !positiveDecimal(submitted.exchangeRates.CNY) || !positiveDecimal(submitted.exchangeRates.HKD)))) { text('settings-error',custom ? '请填写单位名称，并输入非负数字作为自定义比例。' : official ? '请填写货币名称，并为 Credit 单价及汇率填写大于零的数字。' : '请填写货币名称，并为汇率填写大于零的数字。'); $('settings-error').hidden = false; return; }
     if (!state?.csrfToken) { text('settings-error','尚未连接统计服务，请连接后再保存。'); $('settings-error').hidden = false; return; }
     $('save-settings').disabled = true;
     try { await request('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Meter-Token':state.csrfToken},body:JSON.stringify(submitted)}); $('settings-dialog').close(); await refreshAfterSettings(); showToast('计价与货币设置已保存'); }

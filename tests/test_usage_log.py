@@ -61,7 +61,7 @@ class UsageLogTests(unittest.TestCase):
         result = usage_log.read_usage_log(self.path, expected)
         for turn in result["turns"]:
             slices = turn["usageSlices"]
-            self.assertTrue(all(set(item) == {"day", "model", "serviceTier", "pricingMetadataStatus", "tokens"}
+            self.assertTrue(all(set(item) == {"day", "model", "serviceTier", "pricingMetadataStatus", "apiContext", "tokens"}
                                 and item["pricingMetadataStatus"] in {"known", "unknown"} for item in slices))
             if turn["tokens"] is None:
                 self.assertEqual(slices, [])
@@ -73,6 +73,32 @@ class UsageLogTests(unittest.TestCase):
                 for day, bucket in turn["dailyUsage"].items():
                     self.assertEqual(sum(item["tokens"][key] for item in slices if item["day"] == day), bucket[key])
         return result
+
+    def test_api_context_tracks_individual_calls_not_large_turn_total(self):
+        result = self.read([META, start(), context(),
+                            snapshot(counters(272000, 20)),
+                            snapshot(counters(544001, 40, 20, 10), counters(272001, 20)), stop()])
+        slices = result["turns"][0]["usageSlices"]
+        self.assertEqual({row["apiContext"]: row["tokens"]["input"] for row in slices},
+                         {"short": 272000, "long": 272001})
+
+    def test_missing_calls_do_not_invent_long_context_from_aggregate(self):
+        result = self.read([META, start(), context(), snapshot(counters(100, 20)),
+                            snapshot(counters(700100, 60, 30, 15), counters(100000, 20)), stop()])
+        slices = result["turns"][0]["usageSlices"]
+        self.assertEqual({row["apiContext"]: row["tokens"]["input"] for row in slices},
+                         {"short": 100100, "unknown": 600000})
+
+    def test_partial_call_delta_does_not_prove_a_short_request(self):
+        result = self.read([META, start(), context(), snapshot(counters(300000, 20)),
+                            snapshot(counters(300000, 30), counters(300000, 30)), stop()])
+        slices = result["turns"][0]["usageSlices"]
+        self.assertEqual({row["apiContext"]: row["tokens"]["total"] for row in slices},
+                         {"long": 300020, "unknown": 10})
+
+    def test_legacy_full_session_threshold_is_not_inferred_from_short_call(self):
+        result = self.read([META, start(), context(model="gpt-5.5"), snapshot(counters()), stop()])
+        self.assertEqual(result["turns"][0]["usageSlices"][0]["apiContext"], "unknown")
 
     def test_full_turn_multiple_calls_and_next_turn_use_deltas(self):
         result = self.read([

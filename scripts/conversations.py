@@ -126,7 +126,7 @@ def fetch_conversation_titles(thread_ids: Iterable[str], codex_binary: str | os.
     try:
         with JsonRpcProcess([*prefix, "app-server", "--stdio"], timeout=RPC_TIMEOUT_SECONDS) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter_titles", "version": "0.8.0"},
+                "clientInfo": {"name": "codex_usage_meter_titles", "version": "0.9.0"},
             }})
             initialized = False
             position = 0

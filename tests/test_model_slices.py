@@ -44,6 +44,25 @@ class SliceTests(unittest.TestCase):
         for key in ('amount','credits','usd'):
             self.assertEqual(sum(Decimal(g[key]) for g in period['models']), Decimal(period[key]))
 
+    def test_top_level_astra_does_not_override_other_model_rates(self):
+        turn=fixture([('2026-09-27',model,105000) for model in ('gpt-6-astra','gpt-6-sol','gpt-6-luna')])
+        turn['model']='gpt-6-astra'
+        tokens=dict(total=105000,input=100000,cachedInput=90000,cacheWriteInput=0,output=5000,reasoningOutput=3000)
+        for item in turn['usageSlices']:item['tokens']=dict(tokens)
+        turn['tokens']={key:value*3 for key,value in tokens.items()}
+        turn['dailyUsage']['2026-09-27']=dict(turn['tokens'])
+        price=estimate_turn(turn,SETTINGS)
+        period=summarize_periods([turn],SETTINGS,now=date(2026,9,27))['today']
+        for result in (price,period):
+            self.assertEqual(result['credits'],'13.310000')
+            self.assertEqual(result['amount'],'0.532400')
+            self.assertNotEqual(result['amount'],'1.320000')
+            self.assertEqual({g['model']:g['amount'] for g in result['models']},
+                             {'gpt-6-astra':'0.440000','gpt-6-sol':'0.088000','gpt-6-luna':'0.004400'})
+            rates={g['model']:g['standardRates'] for g in result['models']}
+            self.assertEqual(rates['gpt-6-sol']['uncachedInput'],'50')
+            self.assertEqual(rates['gpt-6-luna']['unit'],'credits_per_million_tokens')
+
     def test_unknown_fragment_does_not_erase_priced_part(self):
         turn = fixture([('2026-09-27',None,1000000),('2026-09-27','gpt-6-astra',2000000)])
         for result in (estimate_turn(turn, SETTINGS), summarize_periods([turn], SETTINGS, now=date(2026,9,27))['today']):
