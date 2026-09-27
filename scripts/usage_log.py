@@ -124,7 +124,8 @@ class _PricingMetadata:
         self.tier_changed = False
         self.incomplete = incomplete
 
-    def observe(self, model: str | None, service_tier: str | None) -> None:
+    def observe(self, model: str | None, service_tier: str | None, *, incomplete: bool = False) -> None:
+        self.incomplete |= incomplete
         if self.first is None:
             self.first = (model, service_tier)
             return
@@ -158,8 +159,12 @@ class _Turn:
         self.tokens: dict[str, int] | None = None
         self.daily_usage: dict[str, dict[str, int]] = {}
         self.undated_tokens = _empty_tokens()
+        self.usage_slices: dict[tuple, dict[str, int]] = {}
         self.reasons: list[str] = []
         self.pricing = _PricingMetadata()
+        self.current_context = {"model": None, "serviceTier": None, "pricingMetadataStatus": "unknown"}
+        self.interval_context = _PricingMetadata()
+        self.interval_context.observe(None, None)
         if not started:
             self.mark("未记录到本轮开始。")
 
@@ -167,7 +172,17 @@ class _Turn:
         if reason not in self.reasons:
             self.reasons.append(reason)
 
-    def add(self, amount: dict[str, int], timestamp: float | int | None) -> None:
+    def set_context(self, metadata: dict[str, Any]) -> None:
+        self.current_context = dict(metadata)
+        self.interval_context.observe(metadata["model"], metadata["serviceTier"],
+                                      incomplete=metadata["pricingMetadataStatus"] != "known")
+
+    def reset_interval(self) -> None:
+        self.interval_context = _PricingMetadata()
+        self.interval_context.observe(self.current_context["model"], self.current_context["serviceTier"],
+                                      incomplete=self.current_context["pricingMetadataStatus"] != "known")
+
+    def add(self, amount: dict[str, int], timestamp: float | int | None, *, metadata: dict[str, Any]) -> None:
         if self.tokens is None:
             self.tokens = dict(amount)
         else:
@@ -178,6 +193,15 @@ class _Turn:
             bucket = self.daily_usage.setdefault(day, _empty_tokens()) if day is not None else self.undated_tokens
             for key, value in amount.items():
                 bucket[key] += value
+            # Freeze numeric usage under the context that covered this increment.
+            # Later context, repeated snapshots and completed-turn updates cannot
+            # relabel prior slices. No prompt or response bodies are retained.
+            key = (day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"])
+            sliced = self.usage_slices.setdefault(key, _empty_tokens())
+            for field, value in amount.items():
+                sliced[field] += value
+            self.pricing.observe(metadata["model"], metadata["serviceTier"],
+                                 incomplete=metadata["pricingMetadataStatus"] != "known")
 
     def export(self) -> dict[str, Any]:
         reasons = list(self.reasons)
@@ -201,6 +225,9 @@ class _Turn:
             "tokens": dict(self.tokens) if self.tokens is not None else None,
             "dailyUsage": {day: dict(tokens) for day, tokens in self.daily_usage.items()},
             "undatedTokens": dict(self.undated_tokens),
+            "usageSlices": [{"day": day, "model": model, "serviceTier": tier,
+                             "pricingMetadataStatus": status, "tokens": dict(tokens)}
+                            for (day, model, tier, status), tokens in self.usage_slices.items()],
             **self.pricing.export(),
         }
 
@@ -215,7 +242,7 @@ class _Reader:
         self.previous_total: dict[str, int] | None = None
         self.baseline_valid = False
         self.warnings: list[str] = []
-        self.pending_contexts: dict[str, _PricingMetadata] = {}
+        self.pending_contexts: dict[str, dict[str, Any]] = {}
         self.pending_context_overflow = False
 
     def warn(self, warning: str) -> None:
@@ -227,6 +254,7 @@ class _Reader:
         self.warn(reason)
         if self.active is not None:
             self.active.mark(reason)
+            self.active.set_context({"model": None, "serviceTier": None, "pricingMetadataStatus": "unknown"})
 
     def handle(self, record: Any) -> None:
         if not isinstance(record, dict):
@@ -276,27 +304,61 @@ class _Reader:
             return
         model = _identifier(payload.get("model"))
         service_tier = _identifier(payload.get("service_tier"))
+        metadata = {"model": model, "serviceTier": service_tier,
+                    "pricingMetadataStatus": "known" if model is not None and service_tier is not None
+                    and not self.pending_context_overflow else "unknown"}
         turn = self.turns.get(turn_id)
         if turn is not None:
-            turn.pricing.observe(model, service_tier)
+            if turn.status == "running":
+                turn.set_context(metadata)
             return
-        metadata = self.pending_contexts.get(turn_id)
-        if metadata is None:
+        if turn_id not in self.pending_contexts:
             if len(self.pending_contexts) >= MAX_PENDING_CONTEXTS:
                 self.pending_contexts.pop(next(iter(self.pending_contexts)))
                 self.pending_context_overflow = True
                 # An evicted ID could appear again. Preserve bounded memory and
                 # avoid later claiming complete metadata after losing evidence.
                 for pending in self.pending_contexts.values():
-                    pending.incomplete = True
+                    pending["pricingMetadataStatus"] = "unknown"
                 self.warn("待归属的模型记录过多，后续计价信息可能不完整。")
-            metadata = _PricingMetadata(incomplete=self.pending_context_overflow)
-            self.pending_contexts[turn_id] = metadata
-        metadata.observe(model, service_tier)
+        if self.pending_context_overflow:
+            metadata["pricingMetadataStatus"] = "unknown"
+        # Context changes without accepted usage do not create model slices.
+        self.pending_contexts[turn_id] = metadata
 
     def attach_context(self, turn: _Turn) -> None:
         metadata = self.pending_contexts.pop(turn.id, None)
-        turn.pricing = metadata if metadata is not None else _PricingMetadata(incomplete=self.pending_context_overflow)
+        if metadata is not None:
+            turn.set_context(metadata)
+            # This exact-turn context predates its start, so it already covers
+            # the new turn's interval. An initial unknown placeholder is not
+            # evidence that this interval crossed a model boundary.
+            turn.reset_interval()
+
+    def add_usage(self, turn: _Turn, amount: dict[str, int], timestamp: float | int | None,
+                  last: dict[str, int] | None, *, cumulative_delta: bool = False) -> None:
+        """Attribute only the evidence available for an accepted increment.
+
+        A delta crossing context changes may contain multiple calls. A coherent
+        last-call subset belongs to the current context; any coherent remainder
+        keeps only metadata unchanged across the interval. Without such a split,
+        the whole delta retains that uncertain interval attribution. These are
+        log-context labels, not independently verified provider routing data.
+        """
+        interval = turn.interval_context
+        if cumulative_delta and (interval.model_changed or interval.tier_changed):
+            uncertain = interval.export()
+            uncertain["pricingMetadataStatus"] = "unknown"
+            remainder = _delta(amount, last) if last is not None else None
+            if remainder is not None:
+                turn.add(remainder, timestamp, metadata=uncertain)
+                turn.add(last, timestamp, metadata=turn.current_context)
+            else:
+                turn.add(amount, timestamp, metadata=uncertain)
+        else:
+            turn.add(amount, timestamp, metadata=turn.current_context)
+        if any(amount.values()):
+            turn.reset_interval()
 
     def start(self, payload: dict[str, Any], timestamp: float | int | None) -> None:
         turn_id = _identifier(payload.get("turn_id"))
@@ -375,27 +437,27 @@ class _Reader:
             self.warn("已排除无法归属到进行中轮次的用量。")
         elif repeated:
             if self.baseline_valid:
-                turn.add({key: 0 for key in total}, timestamp)
+                self.add_usage(turn, {key: 0 for key in total}, timestamp, last)
             else:
                 turn.mark("缺少完整的起始 token 基线。")
         elif self.baseline_valid and self.previous_total is not None:
             amount = _delta(total, self.previous_total)
             if amount is not None:
-                turn.add(amount, timestamp)
+                self.add_usage(turn, amount, timestamp, last, cumulative_delta=True)
             else:
                 turn.mark("token 计数重置或变化异常，用量可能不完整。")
                 self.warn("检测到 token 计数重置或差值异常。")
                 fallback = _bounded_last(last, total)
                 if fallback is not None:
-                    turn.add(fallback, timestamp)
+                    self.add_usage(turn, fallback, timestamp, last)
         else:
             fallback = _bounded_last(last, total)
             if fallback is not None and total == fallback and turn.started:
-                turn.add(fallback, timestamp)
+                self.add_usage(turn, fallback, timestamp, last)
             else:
                 turn.mark("缺少完整起始基线，仅统计已观察到的增量。")
                 if fallback is not None:
-                    turn.add(fallback, timestamp)
+                    self.add_usage(turn, fallback, timestamp, last)
         self.previous_total = total
         self.baseline_valid = True
 

@@ -4,14 +4,12 @@ from __future__ import annotations
 import calendar
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, localcontext
-import re
 
-from pricing import RATES, estimate_turn
+from pricing import estimate_turn, validated_slices
 
 
 _FIELDS = ("total", "input", "cachedInput", "cacheWriteInput", "output", "reasoningOutput")
 _MONEY_FIELDS = ("amount", "credits", "usd")
-_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 
 
 def _zero():
@@ -109,41 +107,50 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
             _add(sliced, amount)
         _add(totals, sliced)
         turn_count += 1
-        # A known model remains attributable when only its service tier is
-        # uncertain. The parser clears model itself when model evidence mixes.
-        model = turn.get("model")
-        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model):
-            model = None
-        if model not in models:
-            models[model] = {
-                "model": model, "label": RATES[model][0] if model in RATES else model or "未确认模型",
-                "tokens": _zero(), "unpricedTokens": 0, "turnCount": 0,
-                "partial": bool(coverage_gap or unassigned),
-                "money": {key: Decimal(0) for key in _MONEY_FIELDS},
-                "available": dict.fromkeys(_MONEY_FIELDS, False),
-            }
-        group = models[model]
-        _add(group["tokens"], sliced)
-        group["turnCount"] += 1
-        # Sum a turn's matching days before pricing to avoid per-day rounding.
-        estimate = estimate_turn({**turn, "tokens": sliced}, settings)
+        selected_turn = {**turn, "tokens": sliced}
+        try:
+            slices = validated_slices(turn)
+        except (ValueError, TypeError, OverflowError):
+            slices = None
+            selected_turn.update(model=None, serviceTier=None, pricingMetadataStatus="unknown", quality="partial")
+        if slices is not None:
+            selected_turn["usageSlices"] = [item for item in slices if item["day"] is not None
+                                           and start <= _day(item["day"]) < end]
+            selected_turn["dailyUsage"] = {day.isoformat(): amount for day, amount in daily.items() if start <= day < end}
+            selected_turn["undatedTokens"] = _zero()
+        else:
+            selected_turn.pop("usageSlices", None)
+        estimate = estimate_turn(selected_turn, settings)
         turn_partial = (turn.get("quality") != "complete" or
                         bool(turn.get("readingIncomplete")) or estimate["status"] == "partial")
         partial |= turn_partial
-        group["partial"] |= turn_partial
-        if estimate["amount"] is None:
-            unpriced_tokens += sliced["total"]
+        unpriced = estimate.get("unpricedTokens", sliced["total"] if estimate["amount"] is None else 0)
+        if unpriced:
+            unpriced_tokens += unpriced
             unpriced_turns += 1
             partial = True
-            group["unpricedTokens"] += sliced["total"]
-            group["partial"] = True
         for key in _MONEY_FIELDS:
             if estimate[key] is not None:
-                value = Decimal(estimate[key])
-                money[key] += value
+                money[key] += Decimal(estimate[key])
                 available[key] = True
-                group["money"][key] += value
-                group["available"][key] = True
+        # One turn may contribute to several model groups. Count that turn once
+        # in the period, and once in each participating model (never per slice).
+        for row in estimate["models"]:
+            model = row["model"]
+            group = models.setdefault(model, {
+                "model": model, "label": row["label"], "tokens": _zero(),
+                "unpricedTokens": 0, "turnCount": 0, "partial": bool(coverage_gap or unassigned),
+                "money": {key: Decimal(0) for key in _MONEY_FIELDS},
+                "available": dict.fromkeys(_MONEY_FIELDS, False),
+            })
+            _add(group["tokens"], row["tokens"])
+            group["turnCount"] += 1
+            group["unpricedTokens"] += row["unpricedTokens"]
+            group["partial"] |= turn_partial or row["partial"]
+            for key in _MONEY_FIELDS:
+                if row[key] is not None:
+                    group["money"][key] += Decimal(row[key])
+                    group["available"][key] = True
 
     notes = ["按本机日期汇总已记录用量；金额为已可计价部分的估算，不代表订阅扣款。"]
     if not turn_count:

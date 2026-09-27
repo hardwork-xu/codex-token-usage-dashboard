@@ -29,7 +29,7 @@ The native-entry tests execute the published Hook in a temporary cache path from
 
 For a UI check, serve only generated sample data or an empty temporary data directory. Confirm empty, partial, unavailable-price and currency states. If taking a publication screenshot, use visibly synthetic data and inspect the final image before adding it to the release.
 
-Verify that each period's model groups add up to its six token counters and known monetary totals. Include unknown models, missing rates, mixed metadata, event dates, and history beyond the display cap. Unknown prices must not appear as zero.
+Verify that each period's model groups add up to its six token counters and known monetary totals. Include unknown models, missing rates, same-turn model switches, late context, mixed tiers, event dates, and history beyond the display cap. Model slices must conserve every counter; multiple model rows may reference the same turn, so row turn counts are not additive. Unknown prices must not appear as zero.
 
 For macOS demand activation, use a temporary data directory, a unique temporary launchd label, an unused loopback port, and a wrapper that disables account and title queries. Check that there is no worker before a request, a request starts it, it exits after a short test idle timeout, and another request starts a different worker at the same URL. Always unload only that exact temporary job afterward. Never modify hook trust to make integration checks pass. Windows must continue to use the ordinary service path without calling macOS APIs.
 

@@ -6,17 +6,21 @@ Only explicitly supported model IDs are matched; aliases are not guessed.
 from __future__ import annotations
 
 from decimal import Decimal, DecimalException, ROUND_HALF_UP, localcontext
+from datetime import date
+import re
 from typing import Any
 
 
 SOURCE_URL = "https://learn.chatgpt.com/docs/pricing"
 SPEED_SOURCE_URL = "https://learn.chatgpt.com/docs/agent-configuration/speed"
-RATE_DATE = "2026-09-14"
+RATE_DATE = "2026-09-27"
 _MILLION = Decimal(1_000_000)
 _DISPLAY = Decimal("0.000001")
 _MAX_COUNTER = 10**30
 # Uncached input / cached input / output credits per million tokens.
 RATES = {
+    "gpt-6-sol": ("GPT-6 Sol", "50", "5", "250"),
+    "gpt-6-luna": ("GPT-6 Luna", "2.5", "0.25", "12.5"),
     "gpt-6-astra": ("GPT-6 Astra", "250", "25", "1250"),
     "gpt-5.6-sol": ("GPT-5.6 Sol", "100", "10", "500"),
     "gpt-5.6-terra": ("GPT-5.6 Terra", "50", "5", "300"),
@@ -26,6 +30,8 @@ RATES = {
     "gpt-5.4-mini": ("GPT-5.4 mini", "18.75", "1.875", "113"),
 }
 FAST_MULTIPLIERS = {
+    "gpt-6-sol": Decimal("2.5"),
+    "gpt-6-luna": Decimal("2.5"),
     "gpt-6-astra": Decimal("2.5"),
     "gpt-5.6-sol": Decimal("2.5"),
     "gpt-5.6-terra": Decimal("2.5"),
@@ -81,7 +87,7 @@ def _finish(result: dict, turn: dict, notes: list[str]) -> dict:
     return result
 
 
-def estimate_turn(turn: dict, settings: dict) -> dict:
+def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
     """Return a stable, JSON-safe estimate; unknown inputs fail closed.
 
     `amount` uses the selected currency; `usd` is credits × configured USD per
@@ -94,6 +100,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
     settings = settings if isinstance(settings, dict) else {}
     mode = settings.get("pricingMode", "official")
     result = _base(turn, mode != "custom")
+    money_text = (lambda value: format(value, "f")) if _unrounded else _text
     try:
         if not isinstance(mode, str) or mode not in {"official", "custom"}:
             raise ValueError("计价方式无效。")
@@ -110,7 +117,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
                 if raw_rate is None or raw_rate == "":
                     raise ValueError("请先设置每百万 Token 的自定义换算单价。")
                 rate = _number(raw_rate)
-                result["amount"] = _text(Decimal(total) * rate / _MILLION)
+                result["amount"] = money_text(Decimal(total) * rate / _MILLION)
                 result["estimateBasis"] = "custom"
                 result["breakdown"] = {"totalTokens": total, "ratePerMillion": str(rate)}
                 return _finish(result, turn, ["按自定义单价换算，非官方价格。"])
@@ -183,7 +190,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
                 credits = (credits + standard_credits * multiplier_max) / 2
                 multiplier = (multiplier + multiplier_max) / 2
             usd = credits * usd_per_credit
-            result.update(credits=_text(credits), usd=_text(usd), amount=_text(usd * currency_per_usd))
+            result.update(credits=money_text(credits), usd=money_text(usd), amount=money_text(usd * currency_per_usd))
             result["breakdown"] = {
                 **components, "multiplier": str(multiplier),
                 "multiplierMax": None,
@@ -198,3 +205,156 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
         result.update(status="unavailable", credits=None, creditsMax=None, usd=None, usdMax=None, amount=None, amountMax=None, breakdown=None, estimateBasis=None)
         result["note"] = str(exc) if isinstance(exc, ValueError) else "换算数值超出可支持范围。"
         return result
+
+
+TOKEN_FIELDS = ("total", "input", "cachedInput", "cacheWriteInput", "output", "reasoningOutput")
+MONEY_FIELDS = ("amount", "credits", "usd")
+_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
+
+
+def safe_model(value):
+    return value if isinstance(value, str) and _SAFE_ID.fullmatch(value) else None
+
+
+def _valid_tokens(value):
+    if not isinstance(value, dict):
+        raise ValueError("Token 数据无效。")
+    # Counting remains lossless even if a counter exceeds the pricing limit.
+    # _estimate_single separately rejects values too large to price safely.
+    if any(type(value.get(key)) is not int or value[key] < 0 for key in TOKEN_FIELDS):
+        raise ValueError("Token 数据无效。")
+    result = {key: value[key] for key in TOKEN_FIELDS}
+    if (result["total"] != result["input"] + result["output"] or
+            result["cachedInput"] > result["input"] or result["reasoningOutput"] > result["output"]):
+        raise ValueError("Token 明细不一致。")
+    return result
+
+
+def validated_slices(turn):
+    """Validate conservation before using model/date evidence; never repair it by guessing.
+
+    None means a legacy snapshot with no slices. Invalid new snapshots fail closed.
+    Only numeric counters, calendar dates and safe model/tier IDs leave this helper.
+    """
+    if "usageSlices" not in turn:
+        return None
+    raw = turn["usageSlices"]
+    if not isinstance(raw, list):
+        raise ValueError("模型用量片段无效。")
+    total = _valid_tokens(turn.get("tokens"))
+    summed = dict.fromkeys(TOKEN_FIELDS, 0)
+    daily = {}
+    slices = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("模型用量片段无效。")
+        tokens = _valid_tokens(item.get("tokens"))
+        day = item.get("day")
+        if day is not None and (not isinstance(day, str) or date.fromisoformat(day).isoformat() != day):
+            raise ValueError("模型用量日期无效。")
+        model, tier = safe_model(item.get("model")), safe_model(item.get("serviceTier"))
+        status = "known" if item.get("pricingMetadataStatus") == "known" and model and tier else "unknown"
+        slices.append({"day": day, "model": model, "serviceTier": tier,
+                       "pricingMetadataStatus": status, "tokens": tokens})
+        bucket = daily.setdefault(day, dict.fromkeys(TOKEN_FIELDS, 0))
+        for key in TOKEN_FIELDS:
+            summed[key] += tokens[key]
+            bucket[key] += tokens[key]
+    if summed != total:
+        raise ValueError("模型用量与总量不一致。")
+    if "dailyUsage" in turn:
+        expected = turn["dailyUsage"]
+        if not isinstance(expected, dict):
+            raise ValueError("模型用量日期无效。")
+        # Zero buckets carry no usage and need not appear in either representation.
+        expected = {day: _valid_tokens(value) for day, value in expected.items()}
+        if {day: value for day, value in daily.items() if day is not None and any(value.values())} != {
+                day: value for day, value in expected.items() if any(value.values())}:
+            raise ValueError("模型用量与每日总量不一致。")
+    return slices
+
+
+def _model_groups(parts, turn):
+    groups = {}
+    for fragment, price in parts:
+        tokens = fragment.get("tokens")
+        try:
+            tokens = _valid_tokens(tokens)
+        except ValueError:
+            continue
+        if not any(tokens.values()):
+            continue
+        model = safe_model(fragment.get("model"))
+        group = groups.setdefault(model, {
+            "model": model, "label": RATES[model][0] if model in RATES else model or "未确认模型",
+            "tokens": dict.fromkeys(TOKEN_FIELDS, 0), "turnCount": 1, "partial": False,
+            "unpricedTokens": 0, **{key: None for key in MONEY_FIELDS},
+        })
+        for key in TOKEN_FIELDS:
+            group["tokens"][key] += tokens[key]
+        group["partial"] |= (turn.get("quality") != "complete" or bool(turn.get("readingIncomplete"))
+                              or price["status"] != "estimated")
+        if price["amount"] is None:
+            group["unpricedTokens"] += tokens["total"]
+        for key in MONEY_FIELDS:
+            if price[key] is not None:
+                group[key] = (group[key] or Decimal(0)) + Decimal(price[key])
+    for group in groups.values():
+        for key in MONEY_FIELDS:
+            if group[key] is not None:
+                group[key] = _text(group[key])
+    return sorted(groups.values(), key=lambda group: (-group["tokens"]["total"], group["model"] is None, group["model"] or ""))
+
+
+def estimate_turn(turn: dict, settings: dict) -> dict:
+    """Price conserved model slices independently; keep the unpriced remainder visible."""
+    turn = turn if isinstance(turn, dict) else {}
+    settings = settings if isinstance(settings, dict) else {}
+    invalid = False
+    try:
+        slices = validated_slices(turn)
+    except (ValueError, TypeError, OverflowError):
+        slices, invalid = None, True
+    if slices is None:
+        source = {**turn, "model": safe_model(turn.get("model"))}
+        if invalid:
+            source.update(model=None, serviceTier=None, pricingMetadataStatus="unknown", quality="partial")
+        price = _estimate_single(source, settings)
+        with localcontext() as context:
+            context.prec = 100
+            price["models"] = _model_groups([(source, price)], source)
+        price["unpricedTokens"] = sum(group["unpricedTokens"] for group in price["models"])
+        if invalid:
+            price["note"] = "模型片段校验失败，保留总量并标为未确认模型。 " + price["note"]
+        return price
+    # Merge days before rounding, but retain different model/tier evidence.
+    merged = {}
+    for item in slices:
+        key = (item["model"], item["serviceTier"], item["pricingMetadataStatus"])
+        source = merged.setdefault(key, {**item, "tokens": dict.fromkeys(TOKEN_FIELDS, 0),
+                                        "quality": turn.get("quality"), "status": turn.get("status")})
+        for field in TOKEN_FIELDS:
+            source["tokens"][field] += item["tokens"][field]
+    parts = [(source, _estimate_single(source, settings, _unrounded=True)) for source in merged.values() if any(source["tokens"].values())]
+    if not parts:
+        price = _estimate_single(turn, settings)
+        price.update(models=[], unpricedTokens=0)
+        return price
+    with localcontext() as context:
+        context.prec = 100
+        groups = _model_groups(parts, turn)
+        price = dict(parts[0][1]) if len(parts) == 1 else _base(turn, settings.get("pricingMode", "official") != "custom")
+        price["models"] = groups
+        price["unpricedTokens"] = sum(group["unpricedTokens"] for group in groups)
+        if len(parts) == 1:
+            for key in MONEY_FIELDS:
+                price[key] = groups[0][key]
+        if len(parts) > 1:
+            for key in MONEY_FIELDS:
+                values = [Decimal(group[key]) for group in groups if group[key] is not None]
+                price[key] = _text(sum(values)) if values else None
+            price["status"] = ("unavailable" if price["amount"] is None else "partial" if
+                               any(group["partial"] for group in groups) else "estimated")
+            price["estimateBasis"] = "slices"
+            price["note"] = "按每段记录中的模型与 Token 类别分别估算并相加；未知模型或缺少费率的部分不计入金额。 不代表订阅实际扣款或官方额度占比。"
+        return price
