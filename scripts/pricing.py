@@ -427,7 +427,10 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
     # Merge days before rounding, but retain different model/tier evidence.
     merged = {}
     for item in slices:
-        key = (item["model"], item["serviceTier"], item["pricingMetadataStatus"], item["apiContext"])
+        # Do not spread an unsupported cache-write category to independently
+        # observed, priceable calls when merging days or context evidence.
+        key = (item["model"], item["serviceTier"], item["pricingMetadataStatus"], item["apiContext"],
+               bool(item["tokens"]["cacheWriteInput"]))
         source = merged.setdefault(key, {**item, "tokens": dict.fromkeys(TOKEN_FIELDS, 0),
                                         "quality": turn.get("quality"), "status": turn.get("status")})
         for field in TOKEN_FIELDS:
@@ -455,11 +458,11 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
             price["status"] = ("unavailable" if price["amount"] is None else "partial" if
                                any(group["partial"] for group in groups) else "estimated")
             price["estimateBasis"] = "slices"
-            price["note"] = "按每段记录中的模型与 Token 类别分别估算并相加；未知模型或缺少费率的部分不计入金额。 不代表订阅实际扣款或官方额度占比。"
+            price["note"] = "按每段记录中的模型与 Token 类别分别估算并相加；未知模型、缺少费率或尚未支持的计数类别不计入金额。 不代表订阅实际扣款或官方额度占比。"
             if mode == "api":
                 price["sourceUrl"] = API_SOURCE_URL
                 price["estimateBasis"] = "api_slices"
-                price["note"] = "按各模型 API Standard 文本 Token 费率分别估算替代成本并相加；未知模型或缺少费率的部分不计入金额，不含工具调用等非 Token 费用。"
+                price["note"] = "按各模型 API Standard 文本 Token 费率分别估算替代成本并相加；未知模型、缺少费率或尚未支持的计数类别不计入金额，不含工具调用等非 Token 费用。"
                 if price["apiContextUncertainTokens"]:
                     price["note"] += " 上下文长度缺少足够证据的部分按短与长上下文成本的中点估算。"
                 if turn.get("status") == "running":

@@ -7,6 +7,7 @@ import contextlib
 from copy import deepcopy
 import decimal
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -34,6 +35,8 @@ FX_REFERENCE = {"sourceUrl": "https://www.ecb.europa.eu/stats/policy_and_exchang
 DEFAULT_SETTINGS = {"currencyName": "美元", "currencySymbol": "$", "ratePerMillion": None,
                     "pricingMode": "api", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "standard",
                     "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None}
+QUOTA_STALE_SECONDS = 120
+QUOTA_REFRESH_COOLDOWN = 30
 EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SubagentStop", "SubagentStart"}
 
 
@@ -168,7 +171,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.9.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.9.1"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -219,6 +222,46 @@ def normalize_quota(value):
                             "resetsAt": window.get("resetsAt")})
         output.append({"id": key, "label": bucket.get("limitName") or ("Codex 主额度" if key == "codex" else key), "windows": windows})
     return {"updatedAt": time.time(), "error": None, "buckets": output}
+
+
+def quota_view(value, *, now, last_attempt=None, refreshing=False, validated=True):
+    """Annotate last-good observations without presenting stale quota as current."""
+    result = deepcopy(value) if isinstance(value, dict) else {"updatedAt": None, "error": "额度缓存无效", "buckets": []}
+    def timestamp(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and 0 < value <= 253402300799 and math.isfinite(value))
+    updated = result.get("updatedAt")
+    buckets = result.get("buckets")
+    # A corrupt cache must not leak NaN or malformed rows into the JSON API.
+    clean_buckets = []
+    for bucket in buckets if isinstance(buckets, list) else []:
+        if not isinstance(bucket, dict):
+            continue
+        clean_windows = []
+        for window in bucket.get("windows") if isinstance(bucket.get("windows"), list) else []:
+            remaining = window.get("remainingPercent") if isinstance(window, dict) else None
+            if isinstance(remaining, bool) or not isinstance(remaining, (int, float)) or not 0 <= remaining <= 100:
+                continue
+            minutes = window.get("windowMinutes")
+            clean_windows.append({"remainingPercent": remaining, "usedPercent": 100 - remaining,
+                                  "windowMinutes": minutes if timestamp(minutes) else None,
+                                  "resetsAt": window.get("resetsAt") if timestamp(window.get("resetsAt")) else None})
+        clean_buckets.append({"id": str(bucket.get("id", "")),
+                              "label": str(bucket.get("label", "额度")), "windows": clean_windows})
+    result = {"updatedAt": updated if timestamp(updated) else None,
+              "error": str(result["error"]) if result.get("error") else None, "buckets": clean_buckets}
+    windows = [window for bucket in clean_buckets for window in bucket["windows"]]
+    expires = updated + QUOTA_STALE_SECONDS if timestamp(updated) else None
+    if expires is not None:
+        resets = [window["resetsAt"] for window in windows if timestamp(window.get("resetsAt"))]
+        if resets:
+            expires = min(expires, *resets)
+    status = "unavailable" if not windows or expires is None else (
+        "stale" if not validated or result.get("error") or updated > now + 5 or now >= expires else "fresh")
+    result.update(status=status, expiresAt=expires, staleAfterSeconds=QUOTA_STALE_SECONDS,
+                  lastAttemptAt=last_attempt if timestamp(last_attempt) else None,
+                  refreshing=bool(refreshing))
+    return result
 
 
 def positive_conversion(raw):
@@ -297,6 +340,9 @@ class Meter:
         self.reader_incomplete = {}
         self.snapshot_lock = threading.Lock()
         self.quota = read_json(folder / "quota.json", {"updatedAt": None, "error": "尚未查询额度", "buckets": []})
+        if not isinstance(self.quota, dict):
+            self.quota = {"updatedAt": None, "error": "额度缓存无效", "buckets": []}
+        self.quota_verified = False
         self.refresh_lock = threading.Lock()
         self.last_attempt = 0
         self.last_client = time.time()
@@ -335,20 +381,47 @@ class Meter:
         finally:
             self.title_lock.release()
 
-    def refresh(self):
+    def _begin_refresh(self):
         if not self.refresh_lock.acquire(blocking=False):
-            return
+            return {"status": "running", "retryAfterSeconds": 0}
+        now = time.time()
+        remaining = QUOTA_REFRESH_COOLDOWN - (now - self.last_attempt)
+        if self.last_attempt and now >= self.last_attempt and remaining > 0:
+            self.refresh_lock.release()
+            return {"status": "throttled", "retryAfterSeconds": math.ceil(remaining)}
+        self.last_attempt = now
+        return {"status": "started", "retryAfterSeconds": 0}
+
+    def _refresh_quota(self):
         try:
-            if time.time() - self.last_attempt < 30:
-                return
-            self.last_attempt = time.time()
             try:
                 self.quota = fetch_quota()
-                write_json(self.folder / "quota.json", self.quota)
+                self.quota_verified = True
             except Exception as exc:
+                self.quota_verified = False
                 self.quota = {**self.quota, "error": str(exc) if isinstance(exc, RuntimeError) else "额度查询暂不可用"}
+            # Persist a failure marker too, so restarting cannot revive a failed
+            # observation as fresh. A cache-write failure does not undo a fetch.
+            with contextlib.suppress(OSError):
+                write_json(self.folder / "quota.json", self.quota)
         finally:
             self.refresh_lock.release()
+
+    def refresh(self):
+        state = self._begin_refresh()
+        if state["status"] == "started":
+            self._refresh_quota()
+        return state
+
+    def start_refresh(self):
+        state = self._begin_refresh()
+        if state["status"] == "started":
+            try:
+                threading.Thread(target=self._refresh_quota, daemon=True).start()
+            except RuntimeError:
+                self.refresh_lock.release()
+                raise
+        return state
 
     def settings(self):
         try:
@@ -440,13 +513,16 @@ class Meter:
         message = ("；".join(dict.fromkeys(errors)) if errors else
                    "已登记任务的本地记录；每条仅统计该任务自身，子代理单独列出" if records else
                    "等待登记任务。安装后在 Codex 中审阅并信任本插件 Hooks，新问题才会自动登记。")
-        return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None},
-                "quota": self.quota, "turns": visible_turns, "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
+        return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
+                               "coverage": {"registeredTasks": len(records), "readableTasks": successful_reads,
+                                            "unreadableTasks": len(read_errors),
+                                            "backfillingTasks": sum(bool(r and not r["complete"]) for r in readings.values())}},
+                "quota": quota_view(self.quota, now=time.time(), last_attempt=self.last_attempt, refreshing=self.refresh_lock.locked(), validated=self.quota_verified), "turns": visible_turns, "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
                 "fxReference": {**FX_REFERENCE, "customized": any(decimal.Decimal(settings["exchangeRates"][key]) != decimal.Decimal(EXCHANGE_RATES[key]) for key in EXCHANGE_RATES)}}
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.7"
+    server_version = "CodexUsageMeter/0.9.1"
 
     def log_message(self, *_):
         pass
@@ -488,7 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_titles, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.9.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.9.1", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -500,8 +576,7 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
         if self.path == "/api/refresh":
-            threading.Thread(target=self.server.meter.refresh, daemon=True).start()
-            return self.respond({"ok": True})
+            return self.respond({"ok": True, "refresh": self.server.meter.start_refresh()})
         if self.path not in ("/api/settings", "/api/conversation-label"):
             return self.respond({"error": "不存在"}, 404)
         try:
@@ -742,7 +817,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.9.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.9.1"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

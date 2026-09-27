@@ -15,6 +15,7 @@ Run from the release source folder:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+node tests/test_web_ui.cjs
 ```
 
 The suite covers token increments and duplicate snapshots, malformed or incomplete logs, turn attribution, pricing and currency conversion, unavailable prices, local HTTP restrictions, and MCP behavior. It also checks bounded task-name reads that discard previews and messages, display-ID collisions and local catalog behavior where corresponding tests are present. The tests must not query a real account, launch a model task, or open real task transcripts.
@@ -28,6 +29,8 @@ Check `.agents/plugins/marketplace.json` with Codex's public plugin reader. Its 
 The native-entry tests execute the published Hook in a temporary cache path from an unrelated working directory, verify the registered synthetic log reaches the shared data directory, and check that host `PLUGIN_DATA` cannot split Hook and skill statistics. Browser-entry tests verify runtime copying, cache independence, update rollback, and the allowlist that excludes local data and links. No account credentials or model calls are needed.
 
 For a UI check, serve only generated sample data or an empty temporary data directory. Confirm empty, partial, unavailable-price and currency states. If taking a publication screenshot, use visibly synthetic data and inspect the final image before adding it to the release.
+
+The dependency-free Node UI checks exercise a synthetic DOM, including stale quota, disconnects, refresh acknowledgements, API subtotals and currency persistence. They supplement real browser inspection; they do not prove layout or integration with a signed-in account. Confirm that a failed 100% cache never appears as current remaining quota, and that only a successful observation after restart restores the main percentage.
 
 Verify that each period's model groups add up to its six token counters and known monetary totals. Include unknown models, missing rates, same-turn model switches, late context, mixed tiers, event dates, and history beyond the display cap. Model slices must conserve every counter; multiple model rows may reference the same turn, so row turn counts are not additive. Unknown prices must not appear as zero.
 

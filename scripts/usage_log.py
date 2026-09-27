@@ -203,7 +203,10 @@ class _Turn:
             # session. A short call cannot prove a short session.
             if metadata["model"] in {"gpt-5.5", "gpt-5.4"} and context == "short":
                 context = "unknown"
-            key = (day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"], context)
+            # Cache-write mapping is not verified. Preserve the boundary so an
+            # unsupported call cannot erase the priced subtotal of other calls.
+            key = (day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"], context,
+                   bool(amount["cacheWriteInput"]))
             sliced = self.usage_slices.setdefault(key, _empty_tokens())
             for field, value in amount.items():
                 sliced[field] += value
@@ -234,7 +237,7 @@ class _Turn:
             "undatedTokens": dict(self.undated_tokens),
             "usageSlices": [{"day": day, "model": model, "serviceTier": tier,
                              "pricingMetadataStatus": status, "apiContext": context, "tokens": dict(tokens)}
-                            for (day, model, tier, status, context), tokens in self.usage_slices.items()],
+                            for (day, model, tier, status, context, _cache_write), tokens in self.usage_slices.items()],
             **self.pricing.export(),
         }
 

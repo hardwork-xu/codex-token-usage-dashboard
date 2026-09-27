@@ -21,6 +21,56 @@ import platform_support as platform
 
 
 class PlatformTests(unittest.TestCase):
+    def test_path_cli_precedes_macos_app_fallback_without_home_lookup(self):
+        with mock.patch.object(platform, "is_windows", return_value=False), \
+                mock.patch.object(platform.sys, "platform", "darwin"), \
+                mock.patch.object(platform.shutil, "which", return_value="/synthetic/bin/codex"), \
+                mock.patch.object(Path, "home", side_effect=AssertionError("PATH takes precedence")):
+            self.assertEqual(platform.codex_command(), ["/synthetic/bin/codex"])
+
+    def test_macos_app_layouts_work_without_shell_path_or_recursive_discovery(self):
+        home = Path("/synthetic/home")
+        for applications in (Path("/Applications"), home / "Applications"):
+            for app in ("ChatGPT.app", "Codex.app"):
+                for layout in ("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                               "Contents/Resources/codex"):
+                    expected = applications / app / layout
+                    with self.subTest(app=app, layout=layout, applications=applications), \
+                            mock.patch.object(platform, "is_windows", return_value=False), \
+                            mock.patch.object(platform.sys, "platform", "darwin"), \
+                            mock.patch.object(platform.shutil, "which", return_value=None), \
+                            mock.patch.object(Path, "home", return_value=home), \
+                            mock.patch.object(Path, "is_file", autospec=True, side_effect=lambda path: path == expected), \
+                            mock.patch.object(platform.os, "access", return_value=True) as access, \
+                            mock.patch.object(Path, "rglob", side_effect=AssertionError("no app scan")), \
+                            mock.patch.object(platform.subprocess, "Popen") as popen:
+                        self.assertEqual(platform.codex_command(), [str(expected)])
+                        access.assert_called_once_with(expected, os.X_OK)
+                        popen.assert_not_called()
+
+    def test_macos_skips_inaccessible_or_nonexecutable_candidates(self):
+        candidates = [Path("/synthetic/denied"), Path("/synthetic/not-executable"), Path("/synthetic/working")]
+        with mock.patch.object(platform, "is_windows", return_value=False), \
+                mock.patch.object(platform.sys, "platform", "darwin"), \
+                mock.patch.object(platform.shutil, "which", return_value=None), \
+                mock.patch.object(platform, "_macos_cli_candidates", return_value=iter(candidates)), \
+                mock.patch.object(Path, "is_file", side_effect=[PermissionError("synthetic denied"), True, True]), \
+                mock.patch.object(platform.os, "access", side_effect=[False, True]):
+            self.assertEqual(platform.codex_command(), [str(candidates[-1])])
+
+    def test_missing_cli_does_not_diagnose_login_or_expose_paths(self):
+        for system in ("darwin", "linux"):
+            with self.subTest(system=system), \
+                    mock.patch.object(platform, "is_windows", return_value=False), \
+                    mock.patch.object(platform.sys, "platform", system), \
+                    mock.patch.object(platform.shutil, "which", return_value=None), \
+                    mock.patch.object(platform, "_macos_cli_candidates", return_value=iter([Path("/synthetic/private-path")])), \
+                    mock.patch.object(Path, "is_file", return_value=False), \
+                    self.assertRaisesRegex(RuntimeError, "找不到可运行的 Codex CLI") as caught:
+                platform.codex_command()
+            self.assertNotIn("登录", str(caught.exception))
+            self.assertNotIn("private-path", str(caught.exception))
+
     def test_default_paths_and_explicit_data_override(self):
         with mock.patch.object(platform, "is_windows", return_value=True), mock.patch.dict(os.environ, {"LOCALAPPDATA": "/synthetic/local"}):
             self.assertEqual(platform.default_data_dir(), Path("/synthetic/local/Codex Usage Meter"))

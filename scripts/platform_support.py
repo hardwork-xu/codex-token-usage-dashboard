@@ -48,6 +48,21 @@ def _npm_command(shim):
     return None
 
 
+def _macos_cli_candidates():
+    """Check exact app layouts without depending on a login-shell PATH.
+
+    Current desktop releases bundle a separate CodexCLI.app; older releases
+    stored the executable directly in Resources. Neither path needs a shell,
+    app launch, recursive search, or an environment/configuration change.
+    """
+    layouts = ("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+               "Contents/Resources/codex")
+    for applications in (Path("/Applications"), Path.home() / "Applications"):
+        for name in ("ChatGPT.app", "Codex.app"):
+            for layout in layouts:
+                yield applications / name / layout
+
+
 def codex_command():
     """Return an argument prefix for the installed CLI, including safe npm shims."""
     if is_windows():
@@ -67,15 +82,19 @@ def codex_command():
             command = _npm_command(candidate)
             if command:
                 return command
-        raise RuntimeError("找不到可运行的 Codex CLI，请先安装官方 Windows CLI 并登录，再重新打开终端")
+        raise RuntimeError("找不到可运行的 Codex CLI，请先安装官方 Windows CLI，并确认新终端中的 codex --version 可用")
     candidate = shutil.which("codex")
     if candidate:
         return [candidate]
-    for name in ("ChatGPT", "Codex"):
-        candidate = Path("/Applications") / (name + ".app") / "Contents/Resources/codex"
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return [str(candidate)]
-    raise RuntimeError("找不到 Codex，请先安装并登录 Codex")
+    if sys.platform == "darwin":
+        for candidate in _macos_cli_candidates():
+            try:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return [str(candidate)]
+            except OSError:
+                continue
+        raise RuntimeError("找不到可运行的 Codex CLI，请检查官方 CLI 或 Codex／ChatGPT 应用是否已安装且可访问")
+    raise RuntimeError("找不到可运行的 Codex CLI，请安装官方 CLI，或将 codex 加入当前进程的 PATH")
 
 
 def subprocess_options(*, background=False):
