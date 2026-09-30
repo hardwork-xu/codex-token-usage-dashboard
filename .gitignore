@@ -15,6 +15,7 @@ dev-data/
 local-data/
 registry.json
 quota.json
+credit-balances.json
 endpoint.json
 settings.json
 titles.json

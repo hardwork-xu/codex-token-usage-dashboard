@@ -13,14 +13,17 @@ from typing import Any
 
 SOURCE_URL = "https://learn.chatgpt.com/docs/pricing"
 SPEED_SOURCE_URL = "https://learn.chatgpt.com/docs/agent-configuration/speed"
-RATE_DATE = "2026-09-27"
+RATE_DATE = "2026-09-30"
 API_SOURCE_URL = "https://developers.openai.com/api/docs/pricing"
-API_RATE_DATE = "2026-09-27"
+API_RATE_DATE = "2026-09-30"
+HISTORICAL_RATE_DATE = "2026-09-27"
 _MILLION = Decimal(1_000_000)
 _DISPLAY = Decimal("0.000001")
 _MAX_COUNTER = 10**30
-# Uncached input / cached input / output credits per million tokens.
-RATES = {
+# Preserve the previous plugin snapshot for audit, with its original sources.
+# It is not a billing ledger and is never selected from a usage event's date.
+# Tuple fields are label / uncached input / cached input / output per million.
+_CREDIT_RATES_2026_09_27 = {
     "gpt-6-sol": ("GPT-6 Sol", "50", "5", "250"),
     "gpt-6-luna": ("GPT-6 Luna", "2.5", "0.25", "12.5"),
     "gpt-6-astra": ("GPT-6 Astra", "250", "25", "1250"),
@@ -31,9 +34,7 @@ RATES = {
     "gpt-5.4": ("GPT-5.4", "62.5", "6.25", "375"),
     "gpt-5.4-mini": ("GPT-5.4 mini", "18.75", "1.875", "113"),
 }
-# Standard processing USD per million uncached input / cached input / output.
-# These are independently verified API rates, never credits times a conversion.
-API_RATES = {
+_API_RATES_2026_09_27 = {
     "gpt-6-astra": ("GPT-6 Astra", "10", "1", "50"),
     "gpt-6-sol": ("GPT-6 Sol", "2", "0.2", "10"),
     "gpt-6-luna": ("GPT-6 Luna", "0.1", "0.01", "0.5"),
@@ -44,18 +45,43 @@ API_RATES = {
     "gpt-5.4": ("GPT-5.4", "2.5", "0.25", "15"),
     "gpt-5.4-mini": ("GPT-5.4 mini", "0.75", "0.075", "4.5"),
 }
+HISTORICAL_RATE_SNAPSHOTS = {
+    HISTORICAL_RATE_DATE: {
+        "rateDate": HISTORICAL_RATE_DATE,
+        "creditSourceUrl": SOURCE_URL, "apiSourceUrl": API_SOURCE_URL,
+        "speedSourceUrl": SPEED_SOURCE_URL,
+        "creditRates": dict(_CREDIT_RATES_2026_09_27),
+        "apiRates": dict(_API_RATES_2026_09_27),
+        "apiModelSourceUrls": {model: "https://developers.openai.com/api/docs/models/" + model
+                               for model in _API_RATES_2026_09_27},
+        "creditFastMultipliers": {
+            "gpt-6-sol": "2.5", "gpt-6-luna": "2.5", "gpt-6-astra": "2.5",
+            "gpt-5.6-sol": "2.5", "gpt-5.6-terra": "2.5", "gpt-5.6-luna": "2.5",
+            "gpt-5.5": "2.5", "gpt-5.4": "2",
+        },
+    },
+}
+# September 30 Standard credit rates, with two explicitly dated legacy rows.
+# GPT-5.4/mini are no longer on the current credit table: do not relabel them
+# as newly verified. The remaining previous rows were verified unchanged.
+RATES = {**_CREDIT_RATES_2026_09_27, "gpt-6.1-sol": ("GPT-6.1 Sol", "50", "2.5", "250")}
+HISTORICAL_CREDIT_MODELS = frozenset({"gpt-5.4", "gpt-5.4-mini"})
+# Independently verified Standard API USD prices, never credits times a conversion.
+# All previous API rows remain published on their individual model pages.
+API_RATES = {**_API_RATES_2026_09_27, "gpt-6.1-sol": ("GPT-6.1 Sol", "2", "0.1", "10")}
 API_LONG_CONTEXT_MODELS = frozenset(API_RATES) - {"gpt-5.4-mini"}
 API_LONG_CONTEXT_THRESHOLD = 272_000
-FAST_MULTIPLIERS = {
-    "gpt-6-sol": Decimal("2.5"),
-    "gpt-6-luna": Decimal("2.5"),
-    "gpt-6-astra": Decimal("2.5"),
-    "gpt-5.6-sol": Decimal("2.5"),
-    "gpt-5.6-terra": Decimal("2.5"),
-    "gpt-5.6-luna": Decimal("2.5"),
-    "gpt-5.5": Decimal("2.5"),
-    "gpt-5.4": Decimal("2"),
-}
+# Purchased-credit billing only; included subscription limits use different
+# multipliers (Fast 2.5x, Astra Ultrafast 8x) and cannot be inferred from money.
+FAST_MULTIPLIERS = {model: Decimal(2) for model in (
+    "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
+)}
+ULTRAFAST_MULTIPLIERS = {"gpt-6-astra": Decimal(6)}
+
+
+def _credit_rate_date(model):
+    return HISTORICAL_RATE_DATE if model in HISTORICAL_CREDIT_MODELS else RATE_DATE
 
 
 def _number(value: Any) -> Decimal:
@@ -85,9 +111,11 @@ def _base(turn: dict, official: bool, *, api: bool = False) -> dict:
         "status": "unavailable", "credits": None, "creditsMax": None,
         "usd": None, "usdMax": None, "amount": None, "amountMax": None,
         "note": "", "model": model,
-        "label": "API 替代成本估算" if api else "按官方费率估算" if official else "自定义金额换算",
+        "label": "API 替代成本估算" if api else "购买 credits 费率估算" if official else "自定义金额换算",
         "sourceUrl": (_api_source(model) if api else SOURCE_URL) if official else None,
-        "rateDate": (API_RATE_DATE if api else RATE_DATE) if official else None,
+        "rateDate": (API_RATE_DATE if api else _credit_rate_date(model)) if official else None,
+        "historical": bool(official and not api and model in HISTORICAL_CREDIT_MODELS),
+        "billingBasis": "api_standard" if api else "purchased_credits" if official else "custom",
         "breakdown": None, "estimateBasis": None,
         "apiContextUncertainTokens": 0, "apiLongContextTokens": 0,
     }
@@ -212,28 +240,41 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
             if cache_write:
                 if mode == "api":
                     raise ValueError("缓存写入 Token 与 API 计价字段的映射尚未核实，暂不估算。")
-                raise ValueError("记录含缓存写入 Token，当前官方费率未明确其计价方式。")
+                raise ValueError("Codex credits 无独立缓存写入费；此日志计数与输入字段的映射尚未核实，暂不估算。")
 
             if mode == "api":
                 return _price_api(turn, settings, result, incoming, cached, outgoing, total, money_text)
 
             speed = settings.get("speedMode", "standard")
             fast = FAST_MULTIPLIERS.get(model)
+            ultrafast = ULTRAFAST_MULTIPLIERS.get(model)
             multiplier, multiplier_max = Decimal(1), None
             notes: list[str] = []
             if speed == "standard":
                 result["estimateBasis"] = "standard"
-                notes.append("按你确认的非 Fast 模式计算。")
+                notes.append("按你确认的 Standard（非加速）模式计算。")
             elif speed == "fast":
                 if fast is None:
                     raise ValueError("该模型没有已核实的 Fast 倍率。")
                 multiplier = fast
                 result["estimateBasis"] = "fast"
                 notes.append("按用户选择的 Fast 场景估算，不据此推断实际档位。")
+            elif speed == "ultrafast":
+                if ultrafast is None:
+                    raise ValueError("该模型没有已核实的 Ultrafast 倍率。")
+                multiplier = ultrafast
+                result["estimateBasis"] = "ultrafast"
+                notes.append("按用户选择的 Ultrafast 场景估算，不据此推断实际档位或使用资格。")
             elif speed == "auto":
-                # The official speed page documents `fast`. It does not map
+                # Explicit supported speed IDs can select a rate. Do not map
                 # transcript `default` or API `priority` to Standard/Fast.
-                if metadata == "known" and turn.get("serviceTier") == "fast":
+                if metadata == "known" and turn.get("serviceTier") == "ultrafast":
+                    if ultrafast is None:
+                        raise ValueError("该模型没有已核实的 Ultrafast 倍率。")
+                    multiplier = ultrafast
+                    result["estimateBasis"] = "ultrafast"
+                    notes.append("按记录中的 Ultrafast 档位估算。")
+                elif metadata == "known" and turn.get("serviceTier") == "fast":
                     if fast is None:
                         raise ValueError("该模型没有已核实的 Fast 倍率。")
                     multiplier = fast
@@ -242,7 +283,7 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
                 elif fast is not None:
                     multiplier_max = fast
                     result["estimateBasis"] = "midpoint"
-                    notes.append("按可用估算的中点计算。")
+                    notes.append("速度档位未确认，仅按 Standard 与 Fast 场景的中点估算，不含 Ultrafast。")
                 else:
                     raise ValueError("速度档位不明且没有已核实的 Fast 倍率；可选择 Standard 场景估算。")
             else:
@@ -271,7 +312,11 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
                 "multiplierMax": None,
                 "usdPerCredit": str(usd_per_credit), "currencyPerUsd": str(currency_per_usd),
                 "speedSourceUrl": SPEED_SOURCE_URL,
+                "speedRateDate": _credit_rate_date(model), "billingBasis": "purchased_credits",
             }
+            if result["historical"]:
+                notes.append("使用 2026-09-27 历史 credits 费率；该模型已不在当前 credits 表中，不能视为现行报价。")
+            notes.append("仅按购买 credits 费率比较，不用于推算订阅内含额度或实际扣除记录。")
             notes.append("金额使用设置中的每 credit 美元价值及货币汇率换算。")
             return _finish(result, turn, notes)
     except (ValueError, DecimalException) as exc:
@@ -357,8 +402,10 @@ def standard_rates(model, mode="official"):
         return None
     metadata = {"uncachedInput": rate[1], "cachedInput": rate[2], "output": rate[3],
                 "unit": "usd_per_million_tokens" if mode == "api" else "credits_per_million_tokens",
-                "rateDate": API_RATE_DATE if mode == "api" else RATE_DATE,
-                "sourceUrl": _api_source(model) if mode == "api" else SOURCE_URL}
+                "rateDate": API_RATE_DATE if mode == "api" else _credit_rate_date(model),
+                "sourceUrl": _api_source(model) if mode == "api" else SOURCE_URL,
+                "historical": mode != "api" and model in HISTORICAL_CREDIT_MODELS,
+                "billingBasis": "api_standard" if mode == "api" else "purchased_credits"}
     if mode == "api" and model in API_LONG_CONTEXT_MODELS:
         metadata.update(longContextThreshold=API_LONG_CONTEXT_THRESHOLD,
                         longContextInputMultiplier="2", longContextCachedInputMultiplier="2",
@@ -468,4 +515,17 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
                 if turn.get("status") == "running":
                     price["note"] += " 本题仍在运行，这是截至目前的估算。"
                 price["note"] += " 不代表实际 API 账单或订阅扣款。"
+        if mode == "official":
+            priced_rates = [group["standardRates"] for group in groups
+                            if group["amount"] is not None and group["standardRates"] is not None]
+            dates = {rate["rateDate"] for rate in priced_rates}
+            if dates:
+                price["rateDate"] = next(iter(dates)) if len(dates) == 1 else None
+                price["historical"] = any(rate["historical"] for rate in priced_rates)
+            if len(parts) > 1:
+                price["note"] += " 仅按购买 credits 费率比较，不用于推算订阅内含额度或实际扣除记录。"
+                if any(part["estimateBasis"] == "midpoint" for _, part in parts):
+                    price["note"] += " 速度档位未确认的部分仅按 Standard 与 Fast 场景的中点估算，不含 Ultrafast。"
+                if price["historical"]:
+                    price["note"] += " 部分模型使用 2026-09-27 历史 credits 费率，已不在当前表中；各模型日期单独列明，不能视为现行报价。"
         return price

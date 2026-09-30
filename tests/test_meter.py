@@ -242,7 +242,7 @@ class SnapshotTests(unittest.TestCase):
         with mock.patch.object(meter.UsageLogReader, "read", return_value=self.result):
             price = self.subject.snapshot()["turns"][0]["pricing"]
         self.assertEqual(price["estimateBasis"], "midpoint")
-        self.assertEqual((price["credits"], price["usd"], price["amount"]), ("19.250000", "0.770000", "0.770000"))
+        self.assertEqual((price["credits"], price["usd"], price["amount"]), ("16.500000", "0.660000", "0.660000"))
         self.assertTrue(all(price[key] is None for key in ("creditsMax", "usdMax", "amountMax")))
 
     def test_saved_currency_presets_and_edited_rates_survive_reload(self):

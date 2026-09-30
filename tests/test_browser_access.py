@@ -98,6 +98,27 @@ class BrowserAccessTests(unittest.TestCase):
         self.assertEqual(json.loads(self.marker.read_text()), activation_marker(51234))
         self.assertEqual(self.endpoint.read_bytes(), original_endpoint)
 
+    def test_upgrade_accepts_owned_legacy_runtime_without_credit_module(self):
+        self.seed_installed()
+        old_manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(old_manifest.read_text())
+        value["version"] = "0.9.1"
+        old_manifest.write_text(json.dumps(value))
+        (self.runtime / "scripts/official_credits.py").unlink()
+        result = access.install(self.folder)
+        self.assertEqual(result["port"], 51234)
+        self.assertTrue((self.runtime / "scripts/official_credits.py").is_file())
+
+    def test_missing_credit_module_in_new_runtime_is_not_silently_accepted(self):
+        self.seed_installed()
+        old_manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(old_manifest.read_text())
+        value["version"] = "0.10.0"
+        old_manifest.write_text(json.dumps(value))
+        (self.runtime / "scripts/official_credits.py").unlink()
+        with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
+            access.install(self.folder)
+
     def test_no_saved_endpoint_uses_default_or_explicit_port(self):
         self.endpoint.unlink()
         self.assertEqual(access.install(self.folder, port=51345)["port"], 51345)

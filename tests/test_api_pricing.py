@@ -55,7 +55,7 @@ class ApiPricingTests(unittest.TestCase):
     def test_each_published_model_has_an_independent_api_rate(self):
         # One million tokens in each billed category; context is supplied evidence,
         # not inferred from the aggregate counts (which can span many requests).
-        expected = {"gpt-6-astra": "61.000000", "gpt-6-sol": "12.200000",
+        expected = {"gpt-6.1-sol": "12.100000", "gpt-6-astra": "61.000000", "gpt-6-sol": "12.200000",
                     "gpt-6-luna": "0.610000", "gpt-5.6-sol": "24.400000",
                     "gpt-5.6-terra": "14.200000", "gpt-5.6-luna": "1.420000",
                     "gpt-5.5": "35.500000", "gpt-5.4": "17.750000",
@@ -79,12 +79,12 @@ class ApiPricingTests(unittest.TestCase):
     def test_api_ignores_credit_value_and_codex_speed_settings(self):
         expected = self.estimate()
         for value in ("0", "999", "NaN", [], None):
-            for speed in ("standard", "fast", "auto", "invalid"):
+            for speed in ("standard", "fast", "ultrafast", "auto", "invalid"):
                 with self.subTest(value=value, speed=speed):
                     self.assertEqual(self.estimate(usdPerCredit=value, speedMode=speed), expected)
 
     def test_recorded_service_tier_does_not_change_standard_comparison(self):
-        for tier in (None, "fast", "priority", "default"):
+        for tier in (None, "fast", "ultrafast", "priority", "default"):
             record = turn()
             record.update(serviceTier=tier, pricingMetadataStatus="unknown")
             self.assertEqual(self.estimate(record)["usd"], "0.440000")
@@ -95,6 +95,42 @@ class ApiPricingTests(unittest.TestCase):
         record["tokens"]["reasoningOutput"] = 0
         record["reasoningEffort"] = "ultra"
         self.assertEqual(self.estimate(record)["usd"], expected)
+
+    def test_new_sol_has_lower_cached_rate_without_changing_old_sol(self):
+        tokens = counters(1000000, 1000000, 0, 0)
+        self.assertEqual(self.estimate(turn("gpt-6.1-sol", tokens=tokens))["usd"], "0.100000")
+        self.assertEqual(self.estimate(turn("gpt-6-sol", tokens=tokens))["usd"], "0.200000")
+        record = sliced_turn(turn("gpt-6.1-sol"), turn("gpt-6-sol"), turn())
+        result = self.estimate(record)
+        self.assertEqual(result["usd"], "0.607000")
+        self.assertEqual({row["model"]: row["usd"] for row in result["models"]},
+                         {"gpt-6.1-sol": "0.079000", "gpt-6-sol": "0.088000", "gpt-6-astra": "0.440000"})
+        self.assertEqual(sum(Decimal(row["usd"]) for row in result["models"]), Decimal(result["usd"]))
+
+    def test_new_sol_long_context_and_unknown_midpoint_keep_new_cache_rate(self):
+        for context, expected in (("short", "0.079000"), ("long", "0.133000"), ("unknown", "0.106000")):
+            with self.subTest(context=context):
+                result = self.estimate(turn("gpt-6.1-sol", context))
+                self.assertEqual(result["usd"], expected)
+                self.assertIsNone(result["credits"])
+        short = turn("gpt-6.1-sol", "short", counters(272000, 0, 0, 0))
+        long = turn("gpt-6.1-sol", "long", counters(272001, 0, 0, 0))
+        self.assertEqual(self.estimate(short)["usd"], "0.544000")
+        self.assertEqual(self.estimate(long)["usd"], "1.088004")
+        rate = standard_rates("gpt-6.1-sol", "api")
+        self.assertEqual(rate["longContextThreshold"], 272000)
+        self.assertEqual(rate["longContextScope"], "request")
+        self.assertEqual(rate["sourceUrl"], "https://developers.openai.com/api/docs/models/gpt-6.1-sol")
+        self.assertEqual(rate["rateDate"], "2026-09-30")
+
+    def test_new_sol_api_remains_standard_independent_of_credit_scenarios(self):
+        record = turn("gpt-6.1-sol")
+        for speed in ("standard", "fast", "ultrafast", "auto"):
+            with self.subTest(speed=speed):
+                result = self.estimate(record, usdPerCredit="NaN", speedMode=speed)
+                self.assertEqual(result["usd"], "0.079000")
+                self.assertIsNone(result["credits"])
+                self.assertEqual(result["billingBasis"], "api_standard")
 
     def test_long_context_multiplies_full_input_cache_and_output(self):
         result = self.estimate(turn(context="long"))
@@ -173,6 +209,16 @@ class ApiPricingTests(unittest.TestCase):
         self.assertIsNone(result["amount"])
         self.assertIn("映射尚未核实", result["note"])
 
+    def test_new_sol_published_cache_write_price_does_not_invent_log_mapping(self):
+        unsupported = turn("gpt-6.1-sol")
+        unsupported["tokens"]["cacheWriteInput"] = 1
+        self.assertIsNone(self.estimate(unsupported)["amount"])
+        record = sliced_turn(turn("gpt-6.1-sol"), unsupported)
+        result = self.estimate(record)
+        self.assertEqual(result["usd"], "0.079000")
+        self.assertEqual(result["unpricedTokens"], 105000)
+        self.assertEqual(result["status"], "partial")
+
     def test_fx_uses_unrounded_usd_and_not_credit_conversion(self):
         record = turn("gpt-6-luna", "unknown", counters(1, 1, 0, 0))
         result = self.estimate(record, currencyPerUsd="1000000")
@@ -192,6 +238,9 @@ class ApiPricingTests(unittest.TestCase):
             rate = standard_rates(model, "api")
             self.assertEqual(rate["unit"], "usd_per_million_tokens")
             self.assertEqual(rate["sourceUrl"], "https://developers.openai.com/api/docs/models/" + model)
+            self.assertEqual(rate["rateDate"], "2026-09-30")
+            self.assertFalse(rate["historical"])
+            self.assertEqual(rate["billingBasis"], "api_standard")
         self.assertEqual(standard_rates("gpt-5.4-mini", "api")["output"], "4.5")
         self.assertEqual(standard_rates("gpt-5.4-mini")["output"], "113")
         self.assertEqual(self.estimate()["models"][0]["standardRates"]["unit"], "usd_per_million_tokens")

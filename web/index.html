@@ -33,6 +33,7 @@
     @media(max-width:760px){.estimate-intro{display:block;padding:18px 20px}.summary-currency{max-width:none;margin-top:16px;padding-top:13px;border-top:1px solid #dbe6da}.summary-currency .currency-switch{display:flex;justify-content:flex-start;gap:16px}.summary-currency .currency-buttons{margin:0}.period-money{font-size:34px}.grid>.cost-card,.grid>.latest{grid-column:span 12}.cost-value{font-size:38px}.latest .big-value{font-size:34px}.secondary-quota{padding:20px}.secondary-quota .card-top{align-items:flex-start}.quota-scope{font-size:10px}.period-card{padding:20px}.metric-assumptions{font-size:11px}.intro-description{max-width:none}.model-amount{font-size:18px}.model-category{padding:7px 6px}.model-category-value{font-size:10px}}
     .coverage-summary{font-size:11px;color:var(--muted);line-height:1.8;margin-top:8px}.coverage-summary.attention{color:var(--amber)}
     @media(min-width:681px) and (max-height:760px){.header{min-height:78px}.intro{margin:20px 0 17px;align-items:center}.intro h1{font-size:28px}.eyebrow{margin-bottom:5px}.intro-description{margin-top:6px;font-size:12px}.estimate-intro{padding:13px 18px;margin-bottom:17px;gap:18px}.metric-mode{font-size:12px}.metric-assumptions{font-size:11px;line-height:1.6;margin-top:3px}.metric-boundary{font-size:10px;margin-top:3px}.coverage-summary{font-size:10px;line-height:1.6;margin-top:5px}.summary-currency{max-width:260px}.summary-currency .currency-buttons{margin-top:5px}.summary-currency .fx-reference{margin-top:5px;line-height:1.5}.period-header{margin-bottom:9px}.period-card{padding:19px 22px}.period-date{margin-top:5px}.period-values{margin-top:11px;gap:9px}.period-money{font-size:36px}.period-token-block .period-value{font-size:18px}}
+    .official-card{padding:22px 25px;margin:22px 0;min-width:0}.official-card h2{font-size:15px}.official-scope{font-size:11px;color:var(--muted);margin-top:5px;overflow-wrap:anywhere}.official-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin-top:17px}.official-metric-label{font-size:11px;color:var(--muted);line-height:1.7}.official-primary{font-size:30px;font-weight:550;letter-spacing:-.5px;margin-top:5px;max-width:100%;white-space:nowrap;overflow-x:auto}.official-equivalent{font-size:21px;font-weight:550;letter-spacing:-.3px;line-height:1.6;margin-top:5px;max-width:100%;white-space:nowrap;overflow-x:auto}.official-secondary{font-size:10px;color:var(--muted);line-height:1.8;margin-top:6px;overflow-wrap:anywhere}.official-status{font-size:11px;line-height:1.8;margin-top:13px;color:var(--teal)}.official-status.attention{color:var(--amber)}.official-error{font-size:11px;color:var(--amber);line-height:1.8;margin-top:8px;overflow-wrap:anywhere}.official-tracking{border-top:1px solid var(--line);padding-top:12px;margin-top:17px}.official-change{font-size:20px;margin-top:4px;white-space:nowrap;overflow-x:auto;max-width:100%}.official-details{font-size:11px;color:var(--muted);margin-top:12px}.official-details summary{width:fit-content;color:var(--teal)}.official-history-list,.official-group-list{list-style:none;margin:10px 0 0;padding:0}.official-history-list li{display:flex;justify-content:space-between;gap:18px;padding:8px 0;border-top:1px solid var(--line);font-size:11px}.official-history-list .mono{max-width:60%;overflow-x:auto;white-space:nowrap}.official-group-list li{padding:11px 0;border-top:1px solid var(--line)}.official-group-top{display:flex;align-items:baseline;justify-content:space-between;gap:15px;font-size:12px;color:var(--ink)}.official-group-top .mono{white-space:nowrap;overflow-x:auto;min-width:0}.official-usage-card{background:#fbfcfa}.official-usage-card .button{white-space:nowrap;font-size:11px}.official-usage-card .official-primary{font-size:25px}.official-usage-card+#overview-panel{margin-top:20px}@media(max-width:680px){.official-card{padding:19px 20px;margin:17px 0}.official-card .card-top{align-items:flex-start}.official-metrics{grid-template-columns:1fr;gap:14px}.official-primary{font-size:27px}.official-equivalent{font-size:20px}.official-card h2{font-size:13px}.official-usage-card .button{padding:8px 9px;font-size:10px}.official-history-list li{display:block}.official-history-list .mono{display:block;max-width:100%;margin-top:3px}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
   </style>
 </head>
@@ -52,6 +53,7 @@
       </div><p id="period-unassigned" class="period-unassigned" hidden></p><details class="summary-method"><summary>统计范围与官方额度的区别</summary><p class="period-scope" style="margin:9px 3px 0">仅覆盖已登记日志中的用量，按记录中的 model 分组。官方统计还包含自动审阅、标题生成等本地未覆盖的功能。本地 Token 占比不能换算为官方额度或 Credits 占比；金额是估算价值，不是实际扣款。<a class="pricing-source" href="https://chatgpt.com/settings/usage?tab=analytics" target="_blank" rel="noopener noreferrer">查看官方额度分析 ↗</a></p></details></section>
       <section class="conversation-toolbar" aria-label="选择要查看的对话"><div class="conversation-select-wrap"><label for="conversation-select">正在查看的对话</label><select id="conversation-select" aria-describedby="conversation-filter-note" disabled><option value="">等待对话记录</option></select><p id="conversation-filter-note" class="conversation-toolbar-note">选定后会保持显示这段对话，不会跳到其他正在进行的对话。</p></div><button id="edit-conversation-alias" type="button" class="button conversation-alias-button" disabled>设置别名</button></section>
       <section id="reading-notice" class="reading-notice" aria-labelledby="reading-heading" hidden><p id="reading-identity" class="reading-identity"></p><h2 id="reading-heading" class="reading-heading" role="status">正在补读历史记录</h2><p id="reading-note" class="reading-note"></p><progress id="reading-progress" class="reading-progress" aria-label="历史记录读取进度" aria-describedby="reading-numbers"></progress><p id="reading-numbers" class="reading-numbers mono"></p></section>
+      <section id="official-usage-panel" class="card official-card official-usage-card" aria-labelledby="official-usage-heading"><div class="card-top"><div><h2 id="official-usage-heading">官方用量记录 · 整段对话</h2><p id="official-usage-identity" class="official-scope">请选择一段对话</p></div><button id="refresh-official-usage" type="button" class="button" disabled>同步官方记录</button></div><p class="official-secondary">Codex 返回的估计 Credits，覆盖这段对话；不是本题或今天的用量，也不是钱包实际扣除。</p><p id="official-usage-status" class="official-status" role="status">未提供官方记录。</p><div id="official-usage-values" class="official-metrics" hidden><div><p class="official-metric-label">官方记录中的估计 Credits</p><p id="official-usage-credits" class="official-primary mono">未提供</p></div><div><p class="official-metric-label">参考等价值（USD）</p><p id="official-usage-usd" class="official-equivalent mono">未提供</p></div></div><details id="official-usage-details" class="official-details" hidden><summary>查看官方模型分组</summary><ul id="official-usage-groups" class="official-group-list"></ul></details><p id="official-usage-updated" class="official-secondary"></p><p id="official-usage-note" class="official-secondary"></p><p id="official-usage-error" class="official-error" hidden></p></section>
       <section id="overview-panel" role="tabpanel" aria-labelledby="overview-tab">
         <section class="running-section" aria-labelledby="running-heading"><div class="running-header"><h2 id="running-heading">正在进行的对话</h2><span id="running-count" class="running-count">等待记录</span></div><div id="running-conversations" class="running-grid"></div><p id="running-empty" class="running-empty">当前没有正在进行的对话，可从上方选择已有记录。</p></section>
         <div class="grid">
@@ -62,7 +64,8 @@
         </div><p class="overview-bottom"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 10v6m0-10v1"/></svg>Token 计数与订阅额度是两种不同口径，无法据此计算订阅还剩多少 Token。</p>
       </section>
       <section id="history-panel" class="card history-panel" role="tabpanel" aria-labelledby="history-tab" hidden><div class="history-tools"><div><h2 id="history-heading">最近问题记录</h2><p id="history-filter-description" class="recent-subtitle">按任务查看最近提问的用量。</p></div><p id="history-total" class="history-total">已记录 <strong class="mono">0</strong> 次提问</p></div><div class="table-wrap" id="history-table-wrap" hidden><table><thead><tr><th scope="col">对话 / 提问 / 时间</th><th scope="col">Token 用量</th><th scope="col">记录状态</th><th id="history-pricing-heading" scope="col">API 等价费用（估算）</th></tr></thead><tbody id="history-body"></tbody></table></div><div id="empty-history" class="empty-history"><svg aria-hidden="true" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M7 3h10a2 2 0 0 1 2 2v16l-4-2-3 2-3-2-4 2V5a2 2 0 0 1 2-2Z"/><path d="M8 8h8m-8 4h5"/></svg><h3>从下一次提问开始</h3><p>当本地统计服务收到用量数据，记录会自动出现在这里。</p></div><p class="history-footnote">列表展示最近记录，同时保留各任务最新一题；顶部周期汇总使用全部已登记记录。“部分记录”仅代表已收到的用量；没有完整起止数据时，不会将其标成完整消耗。金额使用当前计价设置；API 模式估算同等 Token 用量的 API 费用，不包含工具附加费、税费，不代表订阅扣款或完整账单。每条记录仅覆盖该任务已记录用量，子代理未汇总。</p></section>
-      <article class="card quota-card secondary-quota" aria-labelledby="quota-heading"><div class="card-top"><div><h2 id="quota-heading">订阅剩余额度</h2><p class="quota-scope">账户订阅窗口 · 不是 API 账户余额，也不参与上方费用计算</p></div><button id="refresh-quota" type="button" class="button quota-refresh">刷新额度</button></div><p id="quota-status" class="quota-status" role="status">等待官方额度状态</p><div id="quota-container" class="quota-container"></div><details id="quota-last-known" class="quota-last-known" hidden><summary id="quota-last-known-summary">查看上次成功记录</summary><p class="quota-historical-note">以下是当时的快照，不能作为当前剩余额度。</p><div id="quota-cached-container" class="quota-container"></div></details><details id="quota-error-details" class="quota-error-details" hidden><summary>查看读取失败原因</summary><p id="quota-error" class="quota-error"></p></details><div class="quota-footnote"><p id="quota-updated">上次成功读取 · 尚无数据</p><p id="quota-attempt"></p><p>保留官方百分比精度，不推算 Token 余额。<a class="pricing-source" href="https://chatgpt.com/settings/usage?tab=analytics" target="_blank" rel="noopener noreferrer">查看官方额度分析 ↗</a></p></div></article>
+      <section class="card official-card official-credits-card" aria-labelledby="official-credits-heading"><div class="card-top"><div><h2 id="official-credits-heading">官方 Credits</h2><p class="official-scope">账户余额 · 独立于 API 费用和本地 Credit 估算</p></div><span id="official-credits-badge" class="badge">未提供</span></div><div class="official-metrics"><div><p id="official-balance-label" class="official-metric-label">官方返回的余额</p><p id="official-balance" class="official-primary mono">未提供</p><p id="official-balance-flags" class="official-secondary"></p></div><div><p class="official-metric-label">余额参考等价值</p><p id="official-equivalent" class="official-equivalent mono">未提供</p><p class="official-secondary">按固定 $0.04 / Credit 折算，不受本地 Credit 单价设置影响；不是 API 费用或现金余额。</p></div></div><div class="official-tracking"><p class="official-metric-label">自跟踪起点的净变化（最新 − 起点）</p><p id="official-net-change" class="official-change mono">未提供</p><p id="official-tracking-start" class="official-secondary"></p><p class="official-secondary">净变化不等于实际消耗；充值、赠送、到期等也会改变余额。</p></div><details id="official-balance-history" class="official-details" hidden><summary>查看余额观察记录</summary><ol id="official-balance-history-list" class="official-history-list"></ol></details><p id="official-credits-status" class="official-status" role="status">官方尚未提供余额。</p><p id="official-credits-note" class="official-secondary"></p><p id="official-credits-error" class="official-error" hidden></p><p class="official-secondary">使用下方“刷新余额与额度”更新官方账户状态。<a class="pricing-source" href="https://chatgpt.com/settings/usage?tab=analytics" target="_blank" rel="noopener noreferrer">查看官方 Credits ↗</a></p></section>
+      <article class="card quota-card secondary-quota" aria-labelledby="quota-heading"><div class="card-top"><div><h2 id="quota-heading">订阅剩余额度</h2><p class="quota-scope">账户订阅窗口 · 不是 API 账户余额，也不参与上方费用计算</p></div><button id="refresh-quota" type="button" class="button quota-refresh">刷新余额与额度</button></div><p id="quota-status" class="quota-status" role="status">等待官方额度状态</p><div id="quota-container" class="quota-container"></div><details id="quota-last-known" class="quota-last-known" hidden><summary id="quota-last-known-summary">查看上次成功记录</summary><p class="quota-historical-note">以下是当时的快照，不能作为当前剩余额度。</p><div id="quota-cached-container" class="quota-container"></div></details><details id="quota-error-details" class="quota-error-details" hidden><summary>查看读取失败原因</summary><p id="quota-error" class="quota-error"></p></details><div class="quota-footnote"><p id="quota-updated">上次成功读取 · 尚无数据</p><p id="quota-attempt"></p><p>保留官方百分比精度，不推算 Token 余额。<a class="pricing-source" href="https://chatgpt.com/settings/usage?tab=analytics" target="_blank" rel="noopener noreferrer">查看官方额度分析 ↗</a></p></div></article>
     </main>
     <footer class="footer"><span class="footer-brand">用量计 / 个人插件</span><span class="footer-local"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/></svg>本地面板 · <span id="last-seen">等待数据</span></span></footer>
   </div>
@@ -71,12 +74,12 @@
       <div class="dialog-body">
         <div class="dialog-header"><h2 id="settings-heading">计价与货币设置</h2><button type="button" id="close-settings" class="icon-button" aria-label="关闭设置"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
         <p class="dialog-description">默认估算：如果相同模型和已记录 Token 用量改用 API Standard，按已观察到的缓存命中比例需要多少费用。也可选择原有 Credit 折算或自定义单价。</p>
-        <div class="field settings-mode"><label for="pricing-mode">计价方式</label><select id="pricing-mode" name="pricingMode"><option value="api">API 等价费用（推荐）</option><option value="official">订阅 Credit 参考价值</option><option value="custom">自定义每百万 Token 价值</option></select></div>
+        <div class="field settings-mode"><label for="pricing-mode">计价方式</label><select id="pricing-mode" name="pricingMode"><option value="api">API 等价费用（推荐）</option><option value="official">本地 Credit 费用估算</option><option value="custom">自定义每百万 Token 价值</option></select></div>
         <div class="settings-currency"><label id="settings-currency-label">显示货币</label><input id="currency-code" name="currencyCode" type="hidden" value="USD"><div class="currency-buttons" role="group" aria-labelledby="settings-currency-label"><button type="button" class="currency-chip" data-settings-currency="CNY" aria-pressed="false">人民币</button><button type="button" class="currency-chip" data-settings-currency="USD" aria-pressed="true">美元</button><button type="button" class="currency-chip" data-settings-currency="HKD" aria-pressed="false">港元</button><button type="button" class="currency-chip" data-settings-currency="CUSTOM" aria-pressed="false">自定义单位</button></div></div>
         <div id="custom-currency-fields" class="custom-currency-fields" hidden><div class="form-row"><div class="field"><label for="currency-name">货币 / 单位名称</label><input id="currency-name" name="currencyName" maxlength="24" placeholder="例如：积分" autocomplete="off"></div><div class="field"><label for="currency-symbol">显示符号</label><input id="currency-symbol" name="currencySymbol" maxlength="8" placeholder="自定义符号" autocomplete="off"></div></div><div id="custom-exchange-field" class="field"><label for="currency-per-usd">1 美元折合多少自定义单位</label><input id="currency-per-usd" name="currencyPerUsd" type="text" inputmode="decimal" placeholder="填写你的换算值" autocomplete="off"></div></div>
         <div id="official-settings" class="settings-section">
           <div id="credit-conversion-settings" hidden><div class="field"><label for="usd-per-credit">每 Credit 的美元价值</label><input id="usd-per-credit" name="usdPerCredit" type="text" inputmode="decimal" placeholder="0.04" autocomplete="off" aria-describedby="credit-price-hint"></div>
-          <p id="credit-price-hint" class="field-hint">默认 $0.04 / Credit，即 2,500 Credits = $100。仅用于 Credit 参考价值模式，不影响 API 等价费用。</p></div>
+          <p id="credit-price-hint" class="field-hint">默认 $0.04 / Credit，即 2,500 Credits = $100。仅用于本地 Credit 费用估算，不影响官方余额折算或 API 等价费用。</p><div class="field"><label for="credit-speed">本地 Credit 估算速度档位</label><select id="credit-speed" name="speedMode" aria-describedby="credit-speed-hint"><option value="standard">Standard</option><option value="fast">Fast</option><option value="ultrafast">UltraFast（支持的模型）</option><option value="auto">按记录；未知时取估算中点</option></select><p id="credit-speed-hint" class="field-hint">只改变本地购买 Credits 的估算场景，不修改 Codex 的实际速度、官方记录或余额。API 始终按 Standard；Ultra 思考强度与速度档位不同。</p></div></div>
           <div class="form-row"><div class="field"><label for="exchange-cny">1 美元折合人民币</label><input id="exchange-cny" name="exchangeCNY" type="text" inputmode="decimal" placeholder="参考汇率" autocomplete="off" aria-describedby="exchange-hint"></div><div class="field"><label for="exchange-hkd">1 美元折合港元</label><input id="exchange-hkd" name="exchangeHKD" type="text" inputmode="decimal" placeholder="参考汇率" autocomplete="off" aria-describedby="exchange-hint"></div></div>
           <p id="exchange-hint" class="field-hint">参考汇率，可修改。美元换算值固定为 1；页面不会自动查询或更新汇率。</p>
         </div>
@@ -98,6 +101,7 @@
   const selectionStorageKey = 'codex-usage-meter.selected-conversation';
   let preferredConversationId = null; try { preferredConversationId = localStorage.getItem(selectionStorageKey); } catch {}
   let quotaRefreshRequested = false, quotaRefreshError = null, quotaRefreshRetryAt = 0;
+  const officialUsageRequests = new Map();
   const text = (id, value) => { $(id).textContent = value; };
   const validNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const fmt = value => validNumber(value) ? numberFormat.format(value) : '—';
@@ -275,10 +279,11 @@
       if ((apiMode() && rates?.unit === 'usd_per_million_tokens' || officialMode() && rates?.unit === 'credits_per_million_tokens') && ['uncachedInput','cachedInput','output'].every(key => rawDecimal(rates[key]) !== null)) {
         const basis = rememberedDetails(JSON.stringify(['rates',scope,modelId(entry)]),'model-rates','单价与计费依据');
         basis.append(node('p','model-details',(apiMode() ? 'API ' : '') + 'Standard 基准单价（' + (apiMode() ? 'USD' : 'Credits') + ' / 百万 Tokens）：普通输入 ' + decimalText(rates.uncachedInput) + ' · 缓存输入 ' + decimalText(rates.cachedInput) + ' · 输出 ' + decimalText(rates.output)));
-        if (apiMode()) {
-          const source = node('p','model-details',rates.rateDate ? '费率快照 · ' + rates.rateDate : '');
+        if (apiMode() || officialMode()) {
+          if (officialMode()) basis.append(node('p','model-details','购买 Credits 的本地估算费率，不是官方账户用量。'));
+          const source = node('p','model-details',rates.rateDate ? (rates.historical ? '历史费率快照 · ' : '费率快照 · ') + rates.rateDate : rates.historical ? '历史费率快照（日期未提供）' : '');
           const url = officialSource(rates.sourceUrl);
-          if (url) { const link = node('a','pricing-source','API 单价来源 ↗'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; if (rates.rateDate) source.append(document.createTextNode(' · ')); source.append(link); }
+          if (url) { const link = node('a','pricing-source',apiMode() ? 'API 单价来源 ↗' : 'Credit 费率来源 ↗'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; if (rates.rateDate) source.append(document.createTextNode(' · ')); source.append(link); }
           if (source.textContent) basis.append(source);
         }
         row.append(basis);
@@ -316,7 +321,7 @@
       text(key + '-date',needsConfiguration ? '设置每月续订日后显示统计范围' : period?.startDate && period?.endDate ? key === 'today' ? period.startDate + ' · 本地日期' : period.startDate + ' 至 ' + period.endDate + '（不含结束日）' : '统计日期暂不可用');
       text(key + '-tokens',unavailable ? '—' : fmt(period.tokens?.total));
       const amount = $(key + '-amount'); amount.textContent = unavailable ? '—' : amountText({amount:period.amount}); amount.title = !unavailable && rawDecimal(period.amount) !== null ? '估算值 ' + amountText({amount:period.amount},true) : '';
-      text(key + '-money-label',apiMode() ? 'API 等价费用（估算）' + (unpriced ? ' · 可计价部分' : '') : officialMode() ? '各模型 Credit 参考价值合计 · 估算' : '自定义折算价值 · 估算');
+      text(key + '-money-label',apiMode() ? 'API 等价费用（估算）' + (unpriced ? ' · 可计价部分' : '') : officialMode() ? '各模型本地 Credit 费用估算合计' : '自定义折算价值 · 估算');
       const pricedModels = modelEntries(period)?.filter(entry => rawDecimal(entry.amount) !== null) || [];
       let pricingSummary = unavailable ? '' : customMode() ? '按设置的统一自定义 Token 单价换算。' : !pricedModels.length ? '暂无可合计的模型金额。' : pricedModels.length === 1 ? '当前可计价部分按 ' + modelLabel(pricedModels[0]) + ' 的费率计算。' : '由 ' + fmt(pricedModels.length) + ' 个模型按各自费率计算后相加。';
       if (!unavailable && !customMode() && unpriced) pricingSummary += ' 未计价部分不套用其他模型费率。';
@@ -365,7 +370,7 @@
   }
   function renderPricing(turn, conversation) {
     const settings = state?.settings || {}, price = turn?.pricing, api = apiMode(), official = officialMode(), credits = $('credit-value'), reading = readState(conversation), partial = reading.incomplete || turn?.quality === 'partial' || price?.status === 'partial' || isRunning(turn);
-    text('pricing-heading',api ? '本任务此题 · API 等价费用（估算）' : official ? '本题 Credit 参考价值 · 按模型计价' : '本题计价 · 自定义比例');
+    text('pricing-heading',api ? '本任务此题 · API 等价费用（估算）' : official ? '本任务此题 · 本地 Credit 费用估算' : '本题计价 · 自定义比例');
     credits.hidden = api;
     credits.replaceChildren(document.createTextNode(official ? creditText(turn) : '自定义'),node('span','credit-unit',official ? 'Credits' : '总 Token 比例'));
     credits.title = official && creditValue(turn) !== null ? creditValue(turn) + ' Credits（估算）' : '';
@@ -374,7 +379,7 @@
     text('pricing-context',turn ? turnModelLabel(turn) + ' · ' + pricingCaption(turn) : reading.error ? '历史记录读取异常，估算尚未就绪' : reading.pending ? '正在补读用量与模型信息' : '等待用量与模型信息');
     const rate = settings.ratePerMillion;
     if (api) text('rate-label','API Standard · USD / 百万 Tokens' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
-    else if (official) text('rate-label','$' + (settings.usdPerCredit || '0.04') + ' / Credit' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
+    else if (official) text('rate-label',({standard:'Standard',fast:'Fast',ultrafast:'UltraFast',auto:'按记录'}[settings.speedMode || 'standard'] || 'Standard') + ' 估算场景 · $' + (settings.usdPerCredit || '0.04') + ' / Credit' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
     else if (rate === null || rate === undefined || rate === '') { const button = node('button','text-button','设置换算比例 ↗'); button.type = 'button'; button.addEventListener('click',openSettings); $('rate-label').replaceChildren(button); }
     else text('rate-label',(settings.currencySymbol || '') + rate + (settings.currencySymbol ? '' : ' ' + (settings.currencyName || '')) + ' / 百万 Token');
     let note = api ? '假设相同模型、相同 Token 用量与已观察到的缓存命中比例，按公开 API Standard 单价估算。' : official ? '按模型的输入、缓存输入和输出费率给出一个估算值。' : '按已记录的总 Token 与自定义比例折算；不使用官方 Credit 费率。';
@@ -387,7 +392,7 @@
     else if (typeof price?.note === 'string' && !/fast|区间|[–～~]/i.test(price.note)) note = price.note;
     if (reading.incomplete) note = '历史记录尚未补齐，当前估算可能继续变化。' + note;
     text('pricing-note',note); $('pricing-note').classList.toggle('attention',reading.incomplete || !!price && (partial || price.status === 'unavailable'));
-    text('cost-disclaimer',(partial ? '仅按已记录用量估算，记录可能不完整。' : '') + (api ? '仅估算 API Token 费用，不含工具附加费、税费；不是订阅扣款、实际账单或节省金额。' : official ? '用于衡量 Pro 订阅内用量，不代表账户实际扣款。' : '自定义折算，不是实际扣款；历史记录随当前比例重新展示。'));
+    text('cost-disclaimer',(partial ? '仅按已记录用量估算，记录可能不完整。' : '') + (api ? '仅估算 API Token 费用，不含工具附加费、税费；不是订阅扣款、实际账单或节省金额。' : official ? '基于本地记录和购买 Credits 费率估算，不是官方记录、订阅额度消耗或实际扣款。' : '自定义折算，不是实际扣款；历史记录随当前比例重新展示。'));
     $('pricing-source').href = officialSource(price?.sourceUrl) || (api ? 'https://developers.openai.com/api/docs/pricing' : 'https://learn.chatgpt.com/docs/pricing');
     text('pricing-source',api ? '官方 API 计价说明 ↗' : '官方 Codex 计价说明 ↗');
     text('source-description',api ? '按各模型的公开 API Standard 单价分别估算；模型明细列出普通输入、缓存输入和输出的 USD / 百万 Tokens 基准单价。' : '按模型与输入、缓存、输出费率给出一个估算值。暂缺公开费率的模型仍保留 Token 记录。');
@@ -417,6 +422,63 @@
     if (reading.incomplete) note = '当前仅含已读到的用量，历史记录尚未补齐。' + note;
     text('quality-note',note); $('quality-note').classList.toggle('attention',reading.incomplete || !!turn && turn.quality !== 'complete');
     renderPricing(turn,conversation);
+  }
+  function exactOfficialDecimal(value, signed = false) {
+    if (typeof value !== 'string' || !(signed ? /^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?$/ : /^(?:0|[1-9]\d*)(?:\.\d+)?$/).test(value)) return null;
+    const sign = /^[+-]/.test(value) ? value[0] : '', raw = sign ? value.slice(1) : value, parts = raw.split('.');
+    return sign + parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',') + (parts.length > 1 ? '.' + parts[1] : '');
+  }
+  function officialError(value) { return typeof value === 'string' ? value : typeof value?.message === 'string' ? value.message : ''; }
+  function renderOfficialCredits() {
+    const c = state?.officialCredits || {}, now = Date.now() / 1000, error = officialError(c.error) || quotaRefreshError?.message || '', balance = exactOfficialDecimal(c.balance,true), hasValue = balance !== null || c.unlimited === true;
+    const fresh = connected && c.status === 'fresh' && !error && stamp(c.updatedAt) !== null && c.updatedAt <= now, pending = quotaRefreshRequested || state?.quota?.refreshing === true;
+    const badge = $('official-credits-badge'); badge.textContent = !connected && hasValue ? '历史记录 · 已断线' : pending ? '正在更新' : !hasValue ? '未提供' : fresh ? '官方最近记录' : '历史记录'; badge.className = 'badge ' + (fresh && hasValue ? 'good' : 'partial');
+    text('official-balance-label',fresh ? '官方返回的余额' : '上次读取的余额（历史）');
+    text('official-balance',c.unlimited === true ? '不限额（官方标记）' : balance === null ? '未提供' : balance + ' Credits');
+    $('official-balance').title = balance !== null ? c.balance + ' Credits（来源原精度）' : '';
+    const flags = [];
+    if (c.unlimited === true) flags.push('官方标记为不限额，不换算成数值余额。');
+    else if (c.hasCredits === false) flags.push('官方标记当前无 Credits；缺少余额数字时不推算为零。');
+    else if (c.hasCredits === true && balance === null) flags.push('官方标记有 Credits，但未提供余额数字。');
+    text('official-balance-flags',flags.join(' '));
+    const usd = exactOfficialDecimal(c.usdEquivalent,true), amount = exactOfficialDecimal(c.amountEquivalent,true), code = currencyCode(), settings = state?.settings || {};
+    text('official-equivalent',code !== 'CUSTOM' && amount !== null ? (settings.currencySymbol ?? '$') + amount + (code !== 'USD' && usd !== null ? ' · US$' + usd : '') : usd !== null ? 'US$' + usd : '未提供');
+    const net = exactOfficialDecimal(c.netChange,true), isPositive = typeof c.netChange === 'string' && !/^[+-]/.test(c.netChange) && /[1-9]/.test(c.netChange);
+    text('official-net-change',net === null ? '未提供' : (isPositive ? '+' : '') + net + ' Credits');
+    const start = exactOfficialDecimal(c.trackingStartBalance,true);
+    text('official-tracking-start',stamp(c.trackingStartAt) !== null ? '跟踪起点 · ' + fullDateText(c.trackingStartAt) + (start !== null ? ' · ' + start + ' Credits' : '') : '跟踪起点尚未提供。');
+    const history = Array.isArray(c.history) ? c.history.filter(row => stamp(row?.observedAt) !== null && exactOfficialDecimal(row.balance,true) !== null).sort((a,b) => b.observedAt - a.observedAt) : [];
+    const list = $('official-balance-history-list'); list.replaceChildren(); $('official-balance-history').hidden = !history.length;
+    for (const row of history) { const item = node('li',''); item.append(node('span','',fullDateText(row.observedAt)),node('span','mono',exactOfficialDecimal(row.balance,true) + ' Credits')); list.append(item); }
+    text('official-credits-status',!connected ? '本地服务已断线，以上仅为此前收到的官方记录。' : pending ? '正在更新官方账户状态；数值以标注的读取时间为准。' : error ? '官方余额读取未完成；已有数值仅供查看历史。' : !hasValue ? '官方尚未提供可显示的 Credits 余额。' : fresh ? '成功读取 · ' + fullDateText(c.updatedAt) : '历史读取 · ' + fullDateText(c.updatedAt) + '，尚不能确认当前余额。');
+    $('official-credits-status').classList.toggle('attention',!fresh || !hasValue);
+    text('official-credits-note',typeof c.note === 'string' ? c.note : ''); $('official-credits-note').hidden = !c.note;
+    text('official-credits-error',error); $('official-credits-error').hidden = !error;
+  }
+  function officialUsageTarget() { return activeView === 'history' && historyAll ? null : selectedConversation(); }
+  function renderOfficialUsage() {
+    const current = officialUsageTarget(), id = current?.id, record = id && state?.officialUsage && typeof state.officialUsage === 'object' ? state.officialUsage[id] : null, control = id ? officialUsageRequests.get(id) : null;
+    if ((control?.message || control?.error) && (record?.updatedAt > (control.beforeUpdatedAt || 0) || officialError(record?.error) && officialError(record?.error) !== control.beforeError)) { control.message = ''; control.error = ''; }
+    const error = officialError(record?.error) || control?.error || '', credits = exactOfficialDecimal(record?.credits), usd = exactOfficialDecimal(record?.usd), groups = Array.isArray(record?.groups) ? record.groups.filter(group => group && typeof group === 'object') : [], hasValue = credits !== null || usd !== null || groups.length > 0;
+    const fresh = connected && record?.status === 'fresh' && !error && stamp(record.updatedAt) !== null && record.updatedAt <= Date.now() / 1000;
+    text('official-usage-identity',current ? current.title + ' · ' + current.displayId : '请在上方选定一段对话；不把全部任务合并成官方对话记录。');
+    text('official-usage-status',!current ? '尚未选定对话。' : !connected ? '连接已中断；已显示的数据为历史记录。' : control?.pending ? '正在提交官方记录同步请求。' : error ? '官方记录读取未完成；已有数据仅供查看历史。' : control?.message ? control.message : !hasValue ? '当前服务未提供这段对话的官方用量；可手动同步，不以本地估算补齐。' : fresh ? '官方最近记录 · 仅此整段对话' : '历史官方记录 · 尚未确认最新用量');
+    $('official-usage-status').classList.toggle('attention',!fresh || !hasValue);
+    $('official-usage-values').hidden = !current || !hasValue;
+    text('official-usage-credits',credits === null ? '未提供' : credits + ' Credits'); text('official-usage-usd',usd === null ? '未提供' : 'US$' + usd);
+    const list = $('official-usage-groups'); list.replaceChildren(); $('official-usage-details').hidden = !current || !groups.length;
+    for (const group of groups) {
+      const item = node('li',''), top = node('div','official-group-top'), groupCredits = exactOfficialDecimal(group.credits), model = typeof group.model === 'string' && group.model ? readableModel(group.model) : '未确认模型';
+      const modelName = node('span','',model); if (typeof group.model === 'string') modelName.title = group.model;
+      top.append(modelName,node('span','mono',groupCredits === null ? 'Credits 未提供' : groupCredits + ' Credits（估计）')); item.append(top);
+      const meta = []; if (typeof group.reasoningEffort === 'string' && group.reasoningEffort) meta.push('思考强度 ' + group.reasoningEffort); if (typeof group.speed === 'string' && group.speed) meta.push('速度 ' + ({standard:'Standard',fast:'Fast',ultrafast:'UltraFast'}[group.speed] || group.speed));
+      if (meta.length) item.append(node('p','official-secondary',meta.join(' · ')));
+      if (group.tokens && typeof group.tokens === 'object') item.append(node('p','official-secondary mono','Tokens ' + fmt(group.tokens.total) + ' · 输入 ' + fmt(group.tokens.input) + '（其中缓存 ' + fmt(group.tokens.cachedInput) + '）· 输出 ' + fmt(group.tokens.output)));
+      list.append(item);
+    }
+    text('official-usage-updated',current && stamp(record?.updatedAt) !== null ? '记录读取时间 · ' + fullDateText(record.updatedAt) : '');
+    text('official-usage-note',current && typeof record?.note === 'string' ? record.note : ''); text('official-usage-error',error); $('official-usage-error').hidden = !error;
+    const wait = Math.max(0,Math.ceil((control?.retryAt || 0) - Date.now() / 1000)), button = $('refresh-official-usage'); button.disabled = !connected || !state?.csrfToken || !id || !conversations().some(c => c.id === id) || !!control?.pending || wait > 0; button.textContent = control?.pending ? '同步中…' : wait > 0 ? wait + ' 秒后可同步' : '同步官方记录'; button.setAttribute('aria-busy',String(!!control?.pending));
   }
   function renderQuotaBuckets(container, buckets, historical = false) {
     container.replaceChildren();
@@ -449,8 +511,8 @@
     $('quota-error-details').hidden = !error; text('quota-error',error || '');
     text('quota-updated','上次成功读取 · ' + (stamp(q.updatedAt) !== null && q.updatedAt <= now ? fullDateText(q.updatedAt) : q.updatedAt ? '记录时间异常' : '尚无成功记录'));
     text('quota-attempt',stamp(q.lastAttemptAt) !== null ? '上次尝试 · ' + fullDateText(q.lastAttemptAt) : '');
-    const wait = Math.max(0,Math.ceil(quotaRefreshRetryAt - now)), button = $('refresh-quota'); button.disabled = !connected || !state?.csrfToken || pending || wait > 0; button.textContent = pending ? '更新中…' : wait > 0 ? wait + ' 秒后可刷新' : '刷新额度';
-    button.setAttribute('aria-busy',String(pending));
+    const wait = Math.max(0,Math.ceil(quotaRefreshRetryAt - now)), button = $('refresh-quota'); button.disabled = !connected || !state?.csrfToken || pending || wait > 0; button.textContent = pending ? '更新中…' : wait > 0 ? wait + ' 秒后可刷新' : '刷新余额与额度';
+    button.setAttribute('aria-busy',String(pending)); renderOfficialCredits();
   }
   function renderChart(list) {
     const available = list.filter(t => validNumber(t.tokens?.total)).slice(0,12).reverse(), plot = $('recent-plot'), reading = readState(selectedConversation()); plot.replaceChildren();
@@ -464,7 +526,7 @@
     const current = conversations().find(c => c.id === selectedConversationId) || selectedConversationSnapshot, focusedTurn = document.activeElement?.dataset?.historyTurn, focusedModel = document.activeElement?.dataset?.modelDetails;
     const relevant = historyAll ? conversations() : [current], incomplete = relevant.some(c => readState(c).incomplete), readingError = relevant.some(c => readState(c).error);
     text('history-heading',historyAll ? '最近问题记录 · 全部任务' : '最近问题记录');
-    text('history-pricing-heading',apiMode() ? 'API 等价费用（估算）' : officialMode() ? 'Credit / 参考价值估算' : '自定义金额估算');
+    text('history-pricing-heading',apiMode() ? 'API 等价费用（估算）' : officialMode() ? '本地 Credit / 费用估算' : '自定义金额估算');
     text('history-filter-description',historyAll ? '显示各任务的最近记录，保留每个任务最新一题；点击标题可单独查看。顶部周期汇总仍使用全部已登记记录。' : current ? current.title + ' · ' + current.displayId + ' · 仅显示此任务的最近记录，保留最新一题' : '等待任务记录');
     const total = $('history-total'); total.replaceChildren(document.createTextNode('当前显示 '),node('strong','mono',fmt(list.length)),document.createTextNode(' 次提问'));
     if (incomplete) total.append(node('span','history-total-note','历史记录尚未补齐'));
@@ -494,9 +556,9 @@
     text('last-seen',lastFetchedAt ? relative(lastFetchedAt) + '同步' : '等待数据');
   }
   function renderMetricContext() {
-    text('page-heading',apiMode() ? 'API 等价费用' : officialMode() ? '订阅 Credit 参考价值' : '自定义用量折算');
-    text('intro-description',apiMode() ? '假设已记录的模型用量改用 API，需要多少 Token 费用。' : officialMode() ? '按订阅 Credit 费率和你设置的购买比例折算，口径不同于 API 费用。' : '按自己设置的统一单价换算已记录 Token。');
-    text('metric-mode',apiMode() ? 'API Standard · 费用估算' : officialMode() ? '当前模式 · 订阅 Credit 参考价值' : '当前模式 · 自定义单价');
+    text('page-heading',apiMode() ? 'API 等价费用' : officialMode() ? '本地 Credit 费用估算' : '自定义用量折算');
+    text('intro-description',apiMode() ? '假设已记录的模型用量改用 API，需要多少 Token 费用。' : officialMode() ? '按购买 Credits 的费率与本地用量估算；不是官方用量记录或余额扣除。' : '按自己设置的统一单价换算已记录 Token。');
+    text('metric-mode',apiMode() ? 'API Standard · 费用估算' : officialMode() ? '当前模式 · 本地 Credit 费用估算' : '当前模式 · 自定义单价');
     text('metric-assumptions',apiMode() ? '同模型与已记录 Token · 沿用已观察到的缓存命中比例 · 不含工具附加费和税费' : officialMode() ? '各模型 Credit 用量 × 每 Credit 美元价值 × 当前汇率' : '已记录总 Token × 自定义统一单价，不区分模型或缓存费率');
     text('metric-boundary','只覆盖已登记记录；不是订阅扣款或 API 账户余额。');
     const c = state?.monitoring?.coverage, parts = [];
@@ -507,13 +569,13 @@
     text('coverage-summary',parts.length ? parts.join(' · ') + (c.unreadableTasks > 0 || c.backfillingTasks > 0 ? '，汇总尚未补齐。' : '。仅代表已登记记录的覆盖情况。') : '记录覆盖范围尚未提供；金额仅表示已记录且可计价的用量。');
     $('coverage-summary').classList.toggle('attention',!parts.length || c.unreadableTasks > 0 || c.backfillingTasks > 0);
   }
-  function render() { const focusedModel = document.activeElement?.dataset?.modelDetails, list = turns(), collection = conversations(list); ensureConversationSelection(collection); const selectedTurns = list.filter(t => t.threadId === selectedConversationId); renderMetricContext(); renderPeriods(); renderConversationPicker(collection); renderReadingNotice(collection); renderRunningConversations(list,collection); renderLatest(selectedTurns); renderQuota(); renderChart(selectedTurns); renderHistory(historyAll ? list : selectedTurns); renderStatus(); restoreModelFocus(focusedModel); }
+  function render() { const focusedModel = document.activeElement?.dataset?.modelDetails, list = turns(), collection = conversations(list); ensureConversationSelection(collection); const selectedTurns = list.filter(t => t.threadId === selectedConversationId); renderMetricContext(); renderPeriods(); renderConversationPicker(collection); renderReadingNotice(collection); renderRunningConversations(list,collection); renderLatest(selectedTurns); renderOfficialUsage(); renderQuota(); renderChart(selectedTurns); renderHistory(historyAll ? list : selectedTurns); renderStatus(); restoreModelFocus(focusedModel); }
   async function request(path, options = {}) { const controller = new AbortController(), timer = setTimeout(() => controller.abort(),8000); try { const response = await fetch(path,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}); let payload; try { payload = await response.json(); } catch { throw new Error('本地服务返回了无法读取的数据。'); } if (!response.ok) throw new Error(payload.error?.message || payload.error || payload.message || '请求未完成，请稍后重试。'); return payload; } finally { clearTimeout(timer); } }
   async function fetchState(force = false) {
     if (document.hidden && !force) return; if (inflight) return statePromise; inflight = true;
     statePromise = (async () => {
       try { const next = await request('/api/state'); if (!next || typeof next !== 'object' || !next.monitoring) throw new Error('本地服务未提供有效的用量状态。'); state = next; connected = true; lastFetchedAt = Date.now() / 1000; $('connection-alert').hidden = true; render(); }
-      catch (error) { connected = false; text('connection-alert',state ? '与本地统计服务的连接已中断。以下保留上次收到的数据，恢复连接后自动更新。' : '暂时无法连接本地统计服务。请确认服务已启动；面板会自动重试。'); $('connection-alert').hidden = false; renderStatus(); renderPeriods(); renderCurrencyButtons(); renderConversationPicker(conversations()); renderReadingNotice(conversations()); renderQuota(); }
+      catch (error) { connected = false; text('connection-alert',state ? '与本地统计服务的连接已中断。以下保留上次收到的数据，恢复连接后自动更新。' : '暂时无法连接本地统计服务。请确认服务已启动；面板会自动重试。'); $('connection-alert').hidden = false; renderStatus(); renderPeriods(); renderCurrencyButtons(); renderConversationPicker(conversations()); renderReadingNotice(conversations()); renderOfficialUsage(); renderQuota(); }
       finally { inflight = false; }
     })();
     return statePromise;
@@ -522,7 +584,7 @@
   function showToast(message) { text('toast',message); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; },3500); }
   function fullSettings() {
     const s = state?.settings || {};
-    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:'standard',subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
+    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:['standard','fast','ultrafast','auto'].includes(s.speedMode) ? s.speedMode : 'standard',subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
   }
   function toggleCurrencyFields() {
     const code = $('currency-code').value, custom = $('pricing-mode').value === 'custom';
@@ -535,9 +597,9 @@
     text('calculation-note',mode === 'api' ? 'API 等价费用 = 各模型的普通输入、缓存输入、输出分别乘以 API Standard 单价后相加，再换算货币。保留已观察到的缓存命中比例，不使用 Credit 购买比例，不含工具附加费与税费。' : mode === 'official' ? '估算金额 = 模型用量对应的 Credits × 每 Credit 美元价值 × 货币换算值。历史记录也会按当前设置重新展示。' : '估算金额 = 已记录总 Token ÷ 1,000,000 × 自定义比例。单价按所填单位计价，不随货币按钮换算。');
   }
   function openSettings() {
-    const settings = fullSettings(); $('currency-name').value = settings.currencyName; $('currency-symbol').value = settings.currencySymbol; $('rate-per-million').value = settings.ratePerMillion ?? ''; $('pricing-mode').value = settings.pricingMode; $('currency-code').value = settings.currencyCode; $('usd-per-credit').value = settings.usdPerCredit; $('currency-per-usd').value = settings.currencyPerUsd; $('exchange-cny').value = settings.exchangeRates.CNY; $('exchange-hkd').value = settings.exchangeRates.HKD; $('subscription-renewal-day').value = settings.subscriptionRenewalDay ?? ''; togglePricingFields(); $('settings-error').hidden = true; $('settings-dialog').showModal();
+    const settings = fullSettings(); $('currency-name').value = settings.currencyName; $('currency-symbol').value = settings.currencySymbol; $('rate-per-million').value = settings.ratePerMillion ?? ''; $('pricing-mode').value = settings.pricingMode; $('currency-code').value = settings.currencyCode; $('usd-per-credit').value = settings.usdPerCredit; $('credit-speed').value = settings.speedMode; $('currency-per-usd').value = settings.currencyPerUsd; $('exchange-cny').value = settings.exchangeRates.CNY; $('exchange-hkd').value = settings.exchangeRates.HKD; $('subscription-renewal-day').value = settings.subscriptionRenewalDay ?? ''; togglePricingFields(); $('settings-error').hidden = true; $('settings-dialog').showModal();
   }
-  function changeTab(name, focus = false) { activeView = name; for (const id of ['overview','history']) { const selected = name === id; $(id + '-tab').setAttribute('aria-selected',String(selected)); $(id + '-tab').tabIndex = selected ? 0 : -1; $(id + '-panel').hidden = !selected; } renderConversationPicker(conversations()); if (focus) $(name + '-tab').focus(); }
+  function changeTab(name, focus = false) { activeView = name; for (const id of ['overview','history']) { const selected = name === id; $(id + '-tab').setAttribute('aria-selected',String(selected)); $(id + '-tab').tabIndex = selected ? 0 : -1; $(id + '-panel').hidden = !selected; } renderConversationPicker(conversations()); renderOfficialUsage(); if (focus) $(name + '-tab').focus(); }
   $('overview-tab').addEventListener('click',() => changeTab('overview')); $('history-tab').addEventListener('click',() => changeTab('history')); $('view-history').addEventListener('click',() => { historyAll = false; renderHistory(turns().filter(t => t.threadId === selectedConversationId)); changeTab('history',true); });
   document.querySelector('[role=tablist]').addEventListener('keydown',event => { if (['ArrowRight','ArrowLeft','Home','End'].includes(event.key)) { event.preventDefault(); const target = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'history' : $('overview-tab').getAttribute('aria-selected') === 'true' ? 'history' : 'overview'; changeTab(target,true); } });
   $('conversation-select').addEventListener('change',event => { const id = event.target.value; if (id === '__all__') { historyAll = true; changeTab('history',true); render(); } else chooseConversation(id); });
@@ -568,7 +630,7 @@
     const submitted = fullSettings(), mode = $('pricing-mode').value, official = mode === 'official', custom = mode === 'custom', code = custom ? 'CUSTOM' : $('currency-code').value, rate = $('rate-per-million').value.trim(), renewal = $('subscription-renewal-day').value.trim();
     submitted.pricingMode = mode; submitted.currencyCode = code;
     if (custom) submitted.ratePerMillion = rate || null;
-    if (official) submitted.usdPerCredit = $('usd-per-credit').value.trim();
+    if (official) { submitted.usdPerCredit = $('usd-per-credit').value.trim(); submitted.speedMode = $('credit-speed').value; }
     if (!custom) submitted.exchangeRates = {CNY:$('exchange-cny').value.trim(),USD:'1',HKD:$('exchange-hkd').value.trim()};
     if (code === 'CUSTOM') { submitted.currencyName = $('currency-name').value.trim(); submitted.currencySymbol = $('currency-symbol').value.trim(); if (!custom) submitted.currencyPerUsd = $('currency-per-usd').value.trim(); }
     else { submitted.currencyName = presetCurrencies[code].name; submitted.currencySymbol = presetCurrencies[code].symbol; submitted.currencyPerUsd = submitted.exchangeRates[code]; }
@@ -581,6 +643,19 @@
     try { await request('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Meter-Token':state.csrfToken},body:JSON.stringify(submitted)}); $('settings-dialog').close(); await refreshAfterSettings(); showToast('计价与货币设置已保存'); }
     catch (error) { text('settings-error',error.message || '保存失败，请重试。'); $('settings-error').hidden = false; }
     finally { $('save-settings').disabled = false; }
+  });
+  $('refresh-official-usage').addEventListener('click',async () => {
+    const current = officialUsageTarget(), id = current?.id, prior = officialUsageRequests.get(id), now = Date.now() / 1000;
+    if (!connected || !state?.csrfToken || !id || !conversations().some(c => c.id === id) || prior?.pending || (prior?.retryAt || 0) > now) return;
+    const record = state?.officialUsage?.[id], control = {pending:true,retryAt:now + 60,beforeUpdatedAt:record?.updatedAt || 0,beforeError:officialError(record?.error),message:'',error:''};
+    officialUsageRequests.set(id,control); renderOfficialUsage();
+    try {
+      const result = await request('/api/official-usage-refresh',{method:'POST',headers:{'Content-Type':'application/json','X-Meter-Token':state.csrfToken},body:JSON.stringify({threadId:id})}), refresh = result?.refresh;
+      if (refresh?.status === 'throttled') { control.retryAt = Date.now() / 1000 + Math.max(60,validNumber(refresh.retryAfterSeconds) ? Math.ceil(refresh.retryAfterSeconds) : 60); control.message = '官方记录同步处于冷却期；以上仍为此前记录，未提供的值保持未知。'; }
+      else control.message = refresh?.status === 'started' ? '已提交官方记录同步；等待新结果，未提供的值保持未知。' : refresh?.status === 'running' ? '这段对话已有官方记录同步请求；等待新结果，未提供的值保持未知。' : '同步请求已提交，尚未确认新的官方记录。';
+      await refreshAfterSettings();
+    } catch (error) { control.error = error.message || '官方记录同步失败，请稍后重试。'; }
+    finally { control.pending = false; renderOfficialUsage(); }
   });
   $('refresh-quota').addEventListener('click',async () => {
     if (!state?.csrfToken || quotaRefreshRequested) { showToast('请先连接本地统计服务'); return; }

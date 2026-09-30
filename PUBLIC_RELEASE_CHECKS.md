@@ -45,3 +45,10 @@ For macOS demand activation, use a temporary data directory, a unique temporary 
 - Inspect Git commit author metadata and repository visibility before publication. Do not publish personal verification notes or the installed plugin directory.
 
 After any code, packaging or documentation changes, repeat the relevant checks on the new release snapshot. A prior audit does not cover later edits.
+
+## Official credit observations
+
+- Exercise decimal-preserving official balances independently of token pricing and currency mode. Missing/null fields stay unavailable; repeated model buckets are not summed. Startup, failure, stale and disconnected observations must not appear live.
+- Check account-scoped balance history, positive/negative net changes, expiry/top-up ambiguity, and protection of `credit-balances.json`. Never commit an actual account snapshot, opaque account identifier, or real thread usage.
+- Test public per-thread usage micro-unit conversion, mismatched IDs, absent `threadUsage`, read failure, unregistered IDs, concurrent requests and the refresh cooldown. Server estimates are not wallet debits; local estimates must not fill a missing server record.
+- Verify the existing macOS owned runtime upgrades atomically when a newly added runtime module was absent in the previous version; a damaged current runtime must still fail safely.

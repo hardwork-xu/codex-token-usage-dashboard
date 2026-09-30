@@ -84,7 +84,7 @@ class SliceTests(unittest.TestCase):
         turn=fixture([('2026-09-27','gpt-6-astra',1000000)]*2)
         turn['usageSlices'][1]['serviceTier']='fast'
         value=estimate_turn(turn, {**SETTINGS,'speedMode':'auto'})
-        self.assertEqual(value['amount'],'42.500000') # unknown standard midpoint 17.5 + explicit fast25
+        self.assertEqual(value['amount'],'35.000000') # Standard/Fast midpoint 15 + explicit purchased-Credits Fast 20
         self.assertEqual(len(value['models']),1)
         self.assertEqual(value['models'][0]['turnCount'],1)
 

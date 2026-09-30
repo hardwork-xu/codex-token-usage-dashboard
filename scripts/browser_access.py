@@ -26,7 +26,7 @@ RUNTIME_NAME = "browser-runtime"
 RUNTIME_OWNER = ".usage-meter-runtime.json"
 RUNTIME_FILES = (
     "scripts/meter.py", "scripts/usage_log.py", "scripts/pricing.py", "scripts/periods.py",
-    "scripts/conversations.py", "scripts/platform_support.py", "scripts/rpc_transport.py",
+    "scripts/conversations.py", "scripts/platform_support.py", "scripts/rpc_transport.py", "scripts/official_credits.py",
     "scripts/service_lifecycle.py", "scripts/browser_access.py", "web/index.html",
     ".codex-plugin/plugin.json",
 )
@@ -83,11 +83,24 @@ def _runtime_payload(root, *, managed=False):
                         relative not in allowed and not (bytecode and bytecode[1] in modules)):
                     raise RuntimeError("运行副本含非预期文件，未覆盖任何文件")
     payload = {}
+    # Existing 0.9.x runtimes predate official credit tracking. Accept their
+    # exact owned payload for atomic replacement/rollback, without accepting a
+    # missing module from a runtime that should already contain it.
+    legacy_credits = False
+    if managed:
+        try:
+            old_manifest = json.loads(_read_existing(root / ".codex-plugin/plugin.json", 32768) or b"{}")
+            old_version = old_manifest.get("version", "").split("+")[0]
+            legacy_credits = old_manifest.get("name") == "codex-usage-meter" and bool(re.fullmatch(r"0\.[0-9]\.[0-9]+", old_version))
+        except (ValueError, AttributeError):
+            pass
     for name in RUNTIME_FILES:
         relative = Path(name)
         _directory(root / relative.parent)
         raw = _read_existing(root / relative, 2 * 1024 * 1024)
         if raw is None:
+            if managed and legacy_credits and name == "scripts/official_credits.py":
+                continue
             raise RuntimeError("插件运行文件不完整，请重新安装完整源码")
         payload[name] = raw
     try:
@@ -198,7 +211,10 @@ def endpoint_port(folder):
         raise RuntimeError("保存的本地面板地址无效，请先修复地址配置") from None
 
 
-def _wait_for_port(port, timeout=8):
+def _wait_for_port(port, timeout=45):
+    # macOS can retain recently closed launchd connections in TIME_WAIT after
+    # the owning job has exited. Keep the address and allow bounded cleanup;
+    # never steal an occupied port or choose another one during an upgrade.
     deadline = time.monotonic() + timeout
     while True:
         try:

@@ -22,6 +22,8 @@ from urllib import request, error, parse
 
 from usage_log import read_usage_log, UsageLogReader
 from pricing import estimate_turn
+from official_credits import (account_scope, credits_from_response, credit_view,
+                              record_balance, fetch_thread_usage, thread_usage_view)
 from periods import summarize_periods
 from conversations import fetch_conversation_titles, normalize_title, display_ids
 from platform_support import default_data_dir, codex_command, file_lock, is_windows, subprocess_options
@@ -171,7 +173,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.9.1"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.10.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -221,7 +223,9 @@ def normalize_quota(value):
                             "usedPercent": used, "remainingPercent": 100 - used,
                             "resetsAt": window.get("resetsAt")})
         output.append({"id": key, "label": bucket.get("limitName") or ("Codex 主额度" if key == "codex" else key), "windows": windows})
-    return {"updatedAt": time.time(), "error": None, "buckets": output}
+    return {"updatedAt": time.time(), "error": None, "buckets": output,
+            "credits": credits_from_response(value),
+            "accountScope": account_scope(value.get("accountId"))}
 
 
 def quota_view(value, *, now, last_attempt=None, refreshing=False, validated=True):
@@ -284,7 +288,7 @@ def validate_settings(value):
     if renewal_day is not None and (type(renewal_day) is not int or not 1 <= renewal_day <= 31):
         raise ValueError("订阅续费日应为 1 到 31 的整数，或留空")
     out["subscriptionRenewalDay"] = renewal_day
-    for key, choices in (("pricingMode", ("api", "official", "custom")), ("speedMode", ("auto", "standard", "fast"))):
+    for key, choices in (("pricingMode", ("api", "official", "custom")), ("speedMode", ("auto", "standard", "fast", "ultrafast"))):
         selected = value.get(key, DEFAULT_SETTINGS[key])
         if selected not in choices:
             raise ValueError("计价方式或速度选项无效")
@@ -343,6 +347,11 @@ class Meter:
         if not isinstance(self.quota, dict):
             self.quota = {"updatedAt": None, "error": "额度缓存无效", "buckets": []}
         self.quota_verified = False
+        self.credit_ledger = read_json(folder / "credit-balances.json", {})
+        self.official_usage = {}
+        self.official_usage_attempts = {}
+        self.official_usage_lock = threading.Lock()
+        self.official_usage_thread = None
         self.refresh_lock = threading.Lock()
         self.last_attempt = 0
         self.last_client = time.time()
@@ -397,6 +406,9 @@ class Meter:
             try:
                 self.quota = fetch_quota()
                 self.quota_verified = True
+                self.credit_ledger = record_balance(self.credit_ledger, self.quota)
+                with contextlib.suppress(OSError):
+                    write_json(self.folder / "credit-balances.json", self.credit_ledger)
             except Exception as exc:
                 self.quota_verified = False
                 self.quota = {**self.quota, "error": str(exc) if isinstance(exc, RuntimeError) else "额度查询暂不可用"}
@@ -438,6 +450,54 @@ class Meter:
             return validate_settings(saved)
         except ValueError:
             return deepcopy(DEFAULT_SETTINGS)
+
+    def start_official_usage_refresh(self, thread_id):
+        records = read_json(self.folder / "registry.json", {})
+        if (not isinstance(thread_id, str) or not 0 < len(thread_id) <= 200
+                or not isinstance(records, dict) or thread_id not in records):
+            raise ValueError("仅能同步已经登记的对话")
+        if not self.official_usage_lock.acquire(blocking=False):
+            return {"status": "running", "retryAfterSeconds": 0}
+        now = time.time()
+        scope = self.quota.get("accountScope")
+        if scope is None or not self.quota_verified:
+            self.official_usage_lock.release()
+            raise ValueError("请先刷新官方余额，确认当前账户后再同步对话记录")
+        attempt_key = (scope, thread_id)
+        previous = self.official_usage_attempts.get(attempt_key, 0)
+        if previous and previous <= now < previous + 60:
+            self.official_usage_lock.release()
+            return {"status": "throttled", "retryAfterSeconds": math.ceil(previous + 60 - now)}
+        self.official_usage_attempts[attempt_key] = now
+        self.official_usage_thread = thread_id
+        def run():
+            try:
+                result = fetch_thread_usage(thread_id, codex_command())
+                # Never reuse records under a different observed account.
+                if self.quota.get("accountScope") != scope:
+                    return
+                # Scope and value are one immutable observation: a snapshot
+                # must never pair an old value with a concurrently updated ID.
+                self.official_usage[thread_id] = {**result, "accountScope": scope}
+            except Exception:
+                if self.quota.get("accountScope") != scope:
+                    return
+                old = self.official_usage.get(thread_id, {})
+                old = old if old.get("accountScope") == scope else {}
+                self.official_usage[thread_id] = {**old,
+                    "accountScope": scope,
+                    "status": "stale" if old.get("credits") is not None else "unavailable",
+                    "error": "官方用量同步失败，请稍后重试或查看官方 Usage 页面"}
+            finally:
+                self.official_usage_thread = None
+                self.official_usage_lock.release()
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except RuntimeError:
+            self.official_usage_thread = None
+            self.official_usage_lock.release()
+            raise
+        return {"status": "started", "retryAfterSeconds": 0}
 
     def snapshot(self):
         # A reader owns an incremental counter baseline; concurrent page/MCP
@@ -513,16 +573,26 @@ class Meter:
         message = ("；".join(dict.fromkeys(errors)) if errors else
                    "已登记任务的本地记录；每条仅统计该任务自身，子代理单独列出" if records else
                    "等待登记任务。安装后在 Codex 中审阅并信任本插件 Hooks，新问题才会自动登记。")
+        quota_snapshot = deepcopy(self.quota)
+        official_records = list(self.official_usage.items())
         return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
                                "coverage": {"registeredTasks": len(records), "readableTasks": successful_reads,
                                             "unreadableTasks": len(read_errors),
                                             "backfillingTasks": sum(bool(r and not r["complete"]) for r in readings.values())}},
-                "quota": quota_view(self.quota, now=time.time(), last_attempt=self.last_attempt, refreshing=self.refresh_lock.locked(), validated=self.quota_verified), "turns": visible_turns, "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
+                "quota": quota_view(quota_snapshot, now=time.time(), last_attempt=self.last_attempt, refreshing=self.refresh_lock.locked(), validated=self.quota_verified),
+                "officialCredits": credit_view(quota_snapshot, self.credit_ledger, settings, now=time.time(), validated=self.quota_verified),
+                "officialUsage": {thread_id: {**thread_usage_view(record, now=time.time(),
+                    validated=self.quota_verified and quota_snapshot.get("accountScope") is not None),
+                    "refreshing": self.official_usage_thread == thread_id}
+                    for thread_id, record in official_records
+                    if thread_id in records and quota_snapshot.get("accountScope") is not None
+                    and record.get("accountScope") == quota_snapshot.get("accountScope")},
+                "turns": visible_turns, "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
                 "fxReference": {**FX_REFERENCE, "customized": any(decimal.Decimal(settings["exchangeRates"][key]) != decimal.Decimal(EXCHANGE_RATES[key]) for key in EXCHANGE_RATES)}}
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.9.1"
+    server_version = "CodexUsageMeter/0.10.0"
 
     def log_message(self, *_):
         pass
@@ -564,7 +634,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_titles, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.9.1", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.10.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -577,13 +647,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/refresh":
             return self.respond({"ok": True, "refresh": self.server.meter.start_refresh()})
-        if self.path not in ("/api/settings", "/api/conversation-label"):
+        if self.path not in ("/api/settings", "/api/conversation-label", "/api/official-usage-refresh"):
             return self.respond({"error": "不存在"}, 404)
         try:
             size = int(self.headers.get("Content-Length", "0"))
             if size < 1 or size > 4096 or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("请求格式无效")
             value = json.loads(self.rfile.read(size))
+            if self.path == "/api/official-usage-refresh":
+                if not isinstance(value, dict) or set(value) != {"threadId"}:
+                    raise ValueError("同步请求字段无效")
+                return self.respond({"ok": True, "refresh": self.server.meter.start_official_usage_refresh(value["threadId"])})
             if self.path == "/api/conversation-label":
                 return self.respond(set_conversation_label(self.server.meter.folder, value))
             settings = validate_settings(value)
@@ -817,7 +891,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.9.1"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.10.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
