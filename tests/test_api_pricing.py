@@ -81,7 +81,15 @@ class ApiPricingTests(unittest.TestCase):
         for value in ("0", "999", "NaN", [], None):
             for speed in ("standard", "fast", "ultrafast", "auto", "invalid"):
                 with self.subTest(value=value, speed=speed):
-                    self.assertEqual(self.estimate(usdPerCredit=value, speedMode=speed), expected)
+                    actual = self.estimate(usdPerCredit=value, speedMode=speed)
+                    # Independent credits intentionally follow the saved speed;
+                    # the selected API comparison remains Standard in every case.
+                    actual.pop("creditEstimate")
+                    reference = deepcopy(expected)
+                    reference.pop("creditEstimate")
+                    for row in actual["models"] + reference["models"]:
+                        row.pop("creditEstimate")
+                    self.assertEqual(actual, reference)
 
     def test_recorded_service_tier_does_not_change_standard_comparison(self):
         for tier in (None, "fast", "ultrafast", "priority", "default"):

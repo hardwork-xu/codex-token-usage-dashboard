@@ -5,7 +5,7 @@ import calendar
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
-from pricing import estimate_turn, validated_slices
+from pricing import credit_estimate_summary, estimate_turn, validated_slices
 
 
 _FIELDS = ("total", "input", "cachedInput", "cacheWriteInput", "output", "reasoningOutput")
@@ -91,6 +91,35 @@ def _format(value):
     return format(value.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP), "f")
 
 
+def _credit_accumulator(partial=False):
+    return {"total": Decimal(0), "available": False, "unpricedTokens": 0,
+            "partial": partial, "dates": set(), "mixedDates": False, "historical": False}
+
+
+def _add_credit(target, estimate):
+    if estimate["credits"] is not None:
+        target["total"] += Decimal(estimate["credits"])
+        target["available"] = True
+    target["unpricedTokens"] += estimate["unpricedTokens"]
+    target["partial"] |= estimate["status"] != "estimated"
+    if estimate["rateDate"]:
+        target["dates"].add(estimate["rateDate"])
+    elif estimate["credits"] is not None:
+        target["mixedDates"] = True
+    target["historical"] |= estimate["historical"]
+
+
+def _finish_credit(target, settings, *, rates=None, empty=False):
+    dates = target["dates"]
+    return credit_estimate_summary(
+        _format(target["total"]) if target["available"] or empty else None,
+        unpriced_tokens=target["unpricedTokens"], partial=target["partial"], rates=rates,
+        rate_date=next(iter(dates)) if len(dates) == 1 and not target["mixedDates"] else None,
+        historical=target["historical"], estimate_basis="period",
+        speed_mode=settings.get("speedMode", "standard"),
+        note="本时段暂无已记录用量。" if empty else None)
+
+
 def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
     totals = _zero()
     money = {key: Decimal(0) for key in _MONEY_FIELDS}
@@ -98,6 +127,7 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
     models = {}
     turn_count = unpriced_tokens = unpriced_turns = uncertain_context_tokens = long_context_tokens = 0
     partial = bool(coverage_gap or unassigned)
+    credit = _credit_accumulator(partial)
     for turn, daily in prepared:
         selected = [amount for day, amount in daily.items() if start <= day < end]
         if not selected:
@@ -121,6 +151,7 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
         else:
             selected_turn.pop("usageSlices", None)
         estimate = estimate_turn(selected_turn, settings)
+        _add_credit(credit, estimate["creditEstimate"])
         uncertain_context_tokens += estimate.get("apiContextUncertainTokens", 0)
         long_context_tokens += estimate.get("apiLongContextTokens", 0)
         turn_partial = (turn.get("quality") != "complete" or
@@ -144,7 +175,10 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
                 "unpricedTokens": 0, "apiContextUncertainTokens": 0, "apiLongContextTokens": 0, "turnCount": 0, "partial": bool(coverage_gap or unassigned),
                 "money": {key: Decimal(0) for key in _MONEY_FIELDS},
                 "available": dict.fromkeys(_MONEY_FIELDS, False),
+                "credit": _credit_accumulator(bool(coverage_gap or unassigned)),
+                "creditRates": row["creditEstimate"]["standardRates"],
             })
+            _add_credit(group["credit"], row["creditEstimate"])
             _add(group["tokens"], row["tokens"])
             group["turnCount"] += 1
             group["unpricedTokens"] += row["unpricedTokens"]
@@ -185,9 +219,11 @@ def _period(prepared, settings, start, end, *, unassigned, coverage_gap):
         "apiContextUncertainTokens": uncertain_context_tokens, "apiLongContextTokens": long_context_tokens,
         "unpricedTokens": unpriced_tokens, "unpricedTurnCount": unpriced_turns,
         "unassignedTokens": unassigned, "partial": partial, "turnCount": turn_count,
+        "creditEstimate": _finish_credit(credit, settings, empty=not turn_count and not credit["partial"]),
         "models": [
             {key: group[key] for key in ("model", "label", "standardRates", "tokens", "unpricedTokens", "apiContextUncertainTokens", "apiLongContextTokens", "partial", "turnCount")} |
-            {key: _format(group["money"][key]) if group["available"][key] else None for key in _MONEY_FIELDS}
+            {key: _format(group["money"][key]) if group["available"][key] else None for key in _MONEY_FIELDS} |
+            {"creditEstimate": _finish_credit(group["credit"], settings, rates=group["creditRates"])}
             for group in sorted(models.values(), key=lambda group: (
                 -group["tokens"]["total"], group["model"] is None, group["model"] or ""))
         ],
@@ -241,6 +277,9 @@ def summarize_periods(turns, settings, *, now=None, reading_incomplete=False, re
                 "unpricedTurnCount": 0, "unassignedTokens": unassigned,
                 "partial": bool(gap or unassigned), "turnCount": 0,
                 "models": [],
+                "creditEstimate": credit_estimate_summary(
+                    None, partial=bool(gap or unassigned),
+                    note="先设置每月续订日，才能汇总当前订阅周期。"),
                 "note": "先设置每月续订日，才能汇总当前订阅周期。",
             }
         else:

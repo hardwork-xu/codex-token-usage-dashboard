@@ -34,6 +34,8 @@ The dependency-free Node UI checks exercise a synthetic DOM, including stale quo
 
 Verify that each period's model groups add up to its six token counters and known monetary totals. Include unknown models, missing rates, same-turn model switches, late context, mixed tiers, event dates, and history beyond the display cap. Model slices must conserve every counter; multiple model rows may reference the same turn, so row turn counts are not additive. Unknown prices must not appear as zero.
 
+Verify the independent `creditEstimate` alongside API and custom money values, at turn, period and model scope. Sum Credits by model, preserve Credit-specific unpriced Tokens, and confirm currency, USD/Credit settings and API context multipliers do not alter this conversion. Saved speed scenarios affect only the corresponding Credit estimate. Missing model rates stay unavailable. UI checks must cover Credits in API mode, partial subtotals, the history view and mode/currency switches without relabeling official account records.
+
 For macOS demand activation, use a temporary data directory, a unique temporary launchd label, an unused loopback port, and a wrapper that disables account and title queries. Check that there is no worker before a request, a request starts it, it exits after a short test idle timeout, and another request starts a different worker at the same URL. Always unload only that exact temporary job afterward. Never modify hook trust to make integration checks pass. Windows must continue to use the ordinary service path without calling macOS APIs.
 
 ## Final publication review

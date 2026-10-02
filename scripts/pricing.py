@@ -449,7 +449,7 @@ def _model_groups(parts, turn, mode="official"):
     return sorted(groups.values(), key=lambda group: (-group["tokens"]["total"], group["model"] is None, group["model"] or ""))
 
 
-def estimate_turn(turn: dict, settings: dict) -> dict:
+def _estimate_turn(turn: dict, settings: dict) -> dict:
     """Price conserved model slices independently; keep the unpriced remainder visible."""
     turn = turn if isinstance(turn, dict) else {}
     settings = settings if isinstance(settings, dict) else {}
@@ -471,6 +471,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
         if invalid:
             price["note"] = "模型片段校验失败，保留总量并标为未确认模型。 " + price["note"]
         return price
+
     # Merge days before rounding, but retain different model/tier evidence.
     merged = {}
     for item in slices:
@@ -529,3 +530,75 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
                 if price["historical"]:
                     price["note"] += " 部分模型使用 2026-09-27 历史 credits 费率，已不在当前表中；各模型日期单独列明，不能视为现行报价。"
         return price
+
+
+def credit_estimate_summary(credits, *, unpriced_tokens=0, partial=False, rates=None,
+                            rate_date=None, historical=False, estimate_basis=None,
+                            speed_mode="standard", note=None):
+    """Describe an independently computed credit subtotal without currency fields."""
+    status = "unavailable" if credits is None else "partial" if partial or unpriced_tokens else "estimated"
+    notes = ["按各模型购买 Credits 费率和保存的速度场景估算，不代表官方实际扣除、余额或订阅内含额度。"]
+    if speed_mode == "auto":
+        notes.append("速度未确认的部分仅按 Standard 与 Fast 场景的中点估算，不含 Ultrafast。")
+    if unpriced_tokens:
+        notes.append("缺少可靠模型、费率、速度或计数类别映射的 Token 未计入 Credits。")
+    elif credits is None:
+        notes.append("暂无可用的 Credits 估算。")
+    if partial:
+        notes.append("Credits 只覆盖已记录且可计价的部分。")
+    if historical:
+        notes.append("包含 2026-09-27 历史 Credits 费率，不能视为现行报价。")
+    if note:
+        notes.append(note)
+    return {"credits": credits, "status": status, "unpricedTokens": unpriced_tokens,
+            "note": " ".join(notes), "standardRates": rates, "rateDate": rate_date,
+            "historical": historical, "estimateBasis": estimate_basis}
+
+
+def estimate_turn(turn: dict, settings: dict) -> dict:
+    """Keep selected-currency pricing and purchased-credit estimates independent.
+
+    Both paths use the same validated, conserved model slices. The second pass
+    fixes internal currency factors at one, so invalid FX, custom prices or a
+    configured credit purchase value cannot hide or change the credit count.
+    It calls the internal estimator directly, never recursing through this API.
+    """
+    turn = turn if isinstance(turn, dict) else {}
+    settings = settings if isinstance(settings, dict) else {}
+    price = _estimate_turn(turn, settings)
+    speed_mode = settings.get("speedMode", "standard")
+    credit_price = _estimate_turn(turn, {"pricingMode": "official", "speedMode": speed_mode,
+                                        "usdPerCredit": "1", "currencyPerUsd": "1"})
+    credit_rows = {}
+    for row in credit_price["models"]:
+        rates = row["standardRates"]
+        credit_rows[row["model"]] = credit_estimate_summary(
+            row["credits"], unpriced_tokens=row["unpricedTokens"], partial=row["partial"],
+            rates=rates, rate_date=rates["rateDate"] if rates else None,
+            historical=bool(rates and rates["historical"]), speed_mode=speed_mode,
+            estimate_basis=credit_price["estimateBasis"] if len(credit_price["models"]) == 1 else None)
+    unpriced = credit_price["unpricedTokens"]
+    if not credit_rows and credit_price["credits"] is None:
+        tokens = turn.get("tokens")
+        total = tokens.get("total") if isinstance(tokens, dict) else None
+        if type(total) is int and total >= 0:
+            unpriced = total
+    known_rates = [row["standardRates"] for row in credit_rows.values() if row["standardRates"]]
+    if not credit_rows:
+        rates = standard_rates(safe_model(turn.get("model")))
+        known_rates = [rates] if rates else []
+    dates = {rates["rateDate"] for rates in known_rates}
+    price["creditEstimate"] = credit_estimate_summary(
+        credit_price["credits"], unpriced_tokens=unpriced,
+        partial=(credit_price["status"] == "partial" or bool(turn.get("readingIncomplete"))
+                 or any(row["status"] != "estimated" for row in credit_rows.values())),
+        rate_date=next(iter(dates)) if len(dates) == 1 else None,
+        historical=any(rates["historical"] for rates in known_rates),
+        estimate_basis=credit_price["estimateBasis"], speed_mode=speed_mode,
+        note="本题仍在运行，这是截至目前的估算。" if turn.get("status") == "running" else None)
+    for row in price["models"]:
+        # Both passes share model attribution, even if one pricing mode cannot
+        # price it. A missing match is never filled from another model's rate.
+        row["creditEstimate"] = credit_rows.get(row["model"]) or credit_estimate_summary(
+            None, unpriced_tokens=row["tokens"]["total"], speed_mode=speed_mode)
+    return price

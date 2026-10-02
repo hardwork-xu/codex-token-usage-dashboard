@@ -173,7 +173,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.10.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.10.1"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -592,7 +592,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.10.0"
+    server_version = "CodexUsageMeter/0.10.1"
 
     def log_message(self, *_):
         pass
@@ -634,7 +634,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_titles, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.10.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.10.1", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -891,7 +891,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.10.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.10.1"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

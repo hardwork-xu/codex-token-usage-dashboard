@@ -1,6 +1,6 @@
 {
   "name": "codex-usage-meter",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "按模型估算 API 等价费用，查看官方 Credits 余额与对话用量",
   "author": {
     "name": "Codex Usage Meter contributors"
