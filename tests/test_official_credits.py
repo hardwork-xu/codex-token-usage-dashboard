@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -169,6 +170,36 @@ class BalanceHistoryTests(unittest.TestCase):
         self.assertEqual(len(result[quota()["accountScope"]]["history"]), 1)
         self.assertEqual(initial, result)
 
+    def test_first_unchanged_poll_across_local_midnight_is_retained(self):
+        before = datetime(2026, 10, 4, 23, 58).timestamp()
+        first = datetime(2026, 10, 5, 0, 2).timestamp()
+        later = datetime(2026, 10, 5, 8, 0).timestamp()
+        ledger = credits.record_balance({}, quota("100.00", updatedAt=before))
+        ledger = credits.record_balance(ledger, quota("100", updatedAt=first))
+        ledger = credits.record_balance(ledger, quota("100.0", updatedAt=first + 60))
+        rows = ledger[quota()["accountScope"]]["history"]
+        self.assertEqual([row["observedAt"] for row in rows], [before, first])
+        value = quota("70", updatedAt=later)
+        ledger = credits.record_balance(ledger, value)
+        view = credits.credit_view(value, ledger, USD, now=later, validated=True)["todayObservation"]
+        self.assertEqual(view["startAt"], first)
+        self.assertEqual(view["netChange"], "-30")
+
+    def test_unchanged_first_poll_across_month_boundary_is_retained(self):
+        before = datetime(2026, 9, 30, 23, 57).timestamp()
+        first = datetime(2026, 10, 1, 0, 3).timestamp()
+        later = datetime(2026, 10, 1, 9, 0).timestamp()
+        ledger = credits.record_balance({}, quota("0", updatedAt=before))
+        ledger = credits.record_balance(ledger, quota("0", updatedAt=first))
+        ledger = credits.record_balance(ledger, quota("0", updatedAt=later))
+        rows = ledger[quota()["accountScope"]]["history"]
+        self.assertEqual([row["observedAt"] for row in rows], [before, first])
+        view = credits.credit_view(quota("0", updatedAt=later), ledger, USD,
+                                   now=later, validated=True)["todayObservation"]
+        self.assertEqual(view["status"], "observed")
+        self.assertEqual((view["startAt"], view["endAt"]), (first, later))
+        self.assertEqual(view["netChange"], "0")
+
     def test_history_is_bounded_but_original_tracking_baseline_is_preserved(self):
         with mock.patch.object(credits, "MAX_HISTORY", 3):
             ledger = {}
@@ -200,6 +231,89 @@ class BalanceHistoryTests(unittest.TestCase):
         updated = credits.record_balance(ledger, quota("80", updatedAt=NOW + 20))
         self.assertEqual(ledger, before)
         self.assertNotEqual(updated, ledger)
+
+
+class TodayBalanceObservationTests(unittest.TestCase):
+    # Local dates mirror both the parser and period summaries on every OS.
+    previous = datetime(2026, 10, 4, 23, 30).timestamp()
+    first = datetime(2026, 10, 5, 0, 49).timestamp()
+    second = datetime(2026, 10, 5, 0, 53).timestamp()
+    current = datetime(2026, 10, 5, 8, 42).timestamp()
+
+    def view(self, points, *, now=None, current=None, account="synthetic-account-a", **updates):
+        ledger = {}
+        for when, balance in points:
+            ledger = credits.record_balance(ledger, quota(balance, updatedAt=when))
+        when, balance = current or points[-1]
+        value = quota(balance, updatedAt=when, account=account, **updates)
+        return credits.credit_view(value, ledger, USD, now=now or self.current, validated=True)
+
+    def test_previous_day_baseline_does_not_become_today_start_balance(self):
+        view = self.view([(self.previous, "62500"), (self.first, "47000.123456789012"),
+                          (self.second, "45000"), (self.current, "0")])
+        result = view["todayObservation"]
+        self.assertEqual(result["status"], "observed")
+        self.assertEqual((result["startAt"], result["endAt"]), (self.first, self.current))
+        self.assertEqual(result["startBalance"], "47000.123456789012")
+        self.assertEqual(result["endBalance"], "0")
+        self.assertEqual(result["netChange"], "-47000.123456789012")
+        self.assertEqual(view["netChange"], "-62500")
+        self.assertIn("不是零点至今的消耗", result["note"])
+
+    def test_one_today_observation_cannot_use_previous_day_point(self):
+        result = self.view([(self.previous, "100"), (self.current, "0")])["todayObservation"]
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIsNone(result["netChange"])
+        self.assertIsNone(result["startBalance"])
+
+    def test_current_snapshot_extends_unchanged_ledger_with_real_time(self):
+        result = self.view([(self.first, "10")], current=(self.current, "10.00"))["todayObservation"]
+        self.assertEqual(result["status"], "observed")
+        self.assertEqual(result["netChange"], "0.00")
+        self.assertEqual(result["endAt"], self.current)
+
+    def test_stale_snapshot_comparison_preserves_top_level_stale_status(self):
+        view = self.view([(self.first, "10")], current=(self.second, "8"), error="query failed")
+        self.assertEqual(view["status"], "stale")
+        self.assertEqual(view["todayObservation"]["status"], "observed")
+        self.assertEqual(view["todayObservation"]["endAt"], self.second)
+        self.assertEqual(view["todayObservation"]["netChange"], "-2")
+
+    def test_increases_are_net_changes_and_accounts_do_not_mix(self):
+        points = [(self.first, "10"), (self.second, "20")]
+        view = self.view(points)
+        self.assertEqual(view["todayObservation"]["netChange"], "10")
+        switched = self.view(points, account="synthetic-account-b")
+        self.assertEqual(switched["todayObservation"]["status"], "unavailable")
+
+    def test_invalid_future_and_nonmonotonic_history_reject_comparison(self):
+        first = {"observedAt": self.first, "balance": "10"}
+        second = {"observedAt": self.second, "balance": "8"}
+        cases = ([first, {"observedAt": self.current + 1, "balance": "7"}],
+                 [second, first], [first, second, second],
+                 [first, {"observedAt": self.second, "balance": "NaN"}],
+                 [first, {"observedAt": True, "balance": "1"}])
+        for rows in cases:
+            with self.subTest(rows=rows):
+                value = quota("0", updatedAt=self.current)
+                ledger = {value["accountScope"]: {"baseline": first, "history": rows}}
+                before = copy.deepcopy(ledger)
+                result = credits.credit_view(value, ledger, USD, now=self.current)["todayObservation"]
+                self.assertEqual(result["status"], "unavailable")
+                self.assertIsNone(result["netChange"])
+                self.assertEqual(ledger, before)
+
+    def test_future_or_conflicting_endpoint_does_not_supply_today_delta(self):
+        for when, balance in ((self.current + 1, "0"), (self.second, "9"), (self.first, "10")):
+            with self.subTest(when=when, balance=balance):
+                result = self.view([(self.first, "10"), (self.second, "8")],
+                                   current=(when, balance))["todayObservation"]
+                self.assertEqual(result["status"], "unavailable")
+
+    def test_unlimited_balance_does_not_claim_net_spend(self):
+        result = self.view([(self.first, "10"), (self.second, "8")],
+                          credits={"balance": "8", "unlimited": True})["todayObservation"]
+        self.assertEqual(result["status"], "unavailable")
 
 
 class ThreadUsageTests(unittest.TestCase):

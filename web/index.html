@@ -37,6 +37,7 @@
     .official-metrics>div{min-width:0}.official-primary{font-size:clamp(23px,3.2vw,30px);line-height:1.35}.official-primary .official-credit-unit{display:block;font-size:12px;font-weight:400;letter-spacing:0;color:var(--muted);margin-top:3px}.official-money-primary,.official-money-secondary{display:block}.official-money-secondary{font-size:12px;font-weight:400;color:var(--muted);letter-spacing:0}.official-equivalent{white-space:normal}.official-money-primary,.official-money-secondary{white-space:nowrap}.official-change .official-credit-unit{font-size:12px;color:var(--muted)}
     .period-credit,.credit-value,.model-credit-line,.credit-cell{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:4px;row-gap:3px;line-height:1.6;letter-spacing:0}.period-credit{font-size:13px;margin-top:8px;color:var(--teal)}.credit-value{font-size:19px;margin-top:11px;color:var(--teal)}.local-credit-number{white-space:nowrap;max-width:100%;overflow-x:auto}.local-credit-label{font-size:10px;font-weight:400;white-space:nowrap;color:var(--muted)}.local-credit-partial{font-size:10px;color:var(--amber)}.model-credit-line{font-size:12px;margin-top:5px;color:var(--teal)}.credit-coverage{font-size:10px;line-height:1.7;color:var(--amber);white-space:normal;margin-top:4px}.credit-coverage:empty{display:none}.credit-estimate-scope{margin:12px 3px 0}.credit-cell{margin-top:9px;white-space:normal}.credit-value.attention,.period-credit.attention,.model-credit-line.attention,.credit-cell.attention{color:var(--amber)}
     .credit-scenario-settings{margin-top:20px;padding-top:17px;border-top:1px solid var(--line)}
+    .local-credit-basis,.credit-speed-summary{flex-basis:100%;font-size:10px;font-weight:400;line-height:1.7;color:var(--muted);white-space:normal}.local-credit-basis{color:var(--teal)}.credit-billing{font-size:11px;line-height:1.8;color:var(--ink);margin-top:8px}.today-observation{margin-top:14px;padding:12px 13px;border:1px solid var(--line);background:#fafbf7;border-radius:10px}.today-observation .card-top{align-items:flex-start;gap:8px;flex-wrap:wrap}.today-observation h4{font-size:11px;font-weight:600;margin:0}.today-observation .badge{font-size:9px}.observation-change{font-size:20px;line-height:1.5;white-space:normal;margin-top:7px}.observation-change .official-credit-unit{font-size:10px;color:var(--muted)}.today-observation .official-credit-number{white-space:nowrap}.speed-overrides{border:0;border-top:1px solid var(--line);margin:17px 0 0;padding:14px 0 0;min-width:0}.speed-overrides legend{font-size:12px;padding:0 6px 0 0}.speed-overrides .form-row{margin-bottom:10px}.credit-override-list{list-style:none;margin:13px 0 0;padding:0}.credit-override-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;padding:8px 0;border-top:1px solid var(--line)}.credit-override-list button{font-size:10px}.credit-override-empty{font-size:11px;color:var(--muted)}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
   </style>
 </head>
@@ -51,7 +52,7 @@
     <main>
       <section class="estimate-intro" aria-labelledby="metric-mode"><div><p id="metric-mode" class="metric-mode">API Standard · 费用估算</p><p id="metric-assumptions" class="metric-assumptions">同模型与已记录 Token · 沿用已观察到的缓存命中比例 · 不含工具附加费和税费</p><p id="metric-boundary" class="metric-boundary">只覆盖已登记记录；不是订阅扣款或 API 账户余额。</p><p id="coverage-summary" class="coverage-summary" role="status">等待读取覆盖范围</p></div><div class="summary-currency"><div class="currency-switch"><span class="currency-switch-label">显示货币</span><div class="currency-buttons" role="group" aria-label="切换显示货币"><button type="button" class="currency-chip" data-currency-code="CNY" aria-pressed="false" disabled>人民币</button><button type="button" class="currency-chip" data-currency-code="USD" aria-pressed="true" disabled>美元</button><button type="button" class="currency-chip" data-currency-code="HKD" aria-pressed="false" disabled>港元</button></div></div><p id="fx-reference" class="fx-reference">参考汇率，可修改</p></div></section>
       <section class="period-section" aria-labelledby="period-heading"><div class="period-header"><h2 id="period-heading">全部已登记任务的用量</h2><p class="period-scope">主任务和子任务各计一次 · 不受下方对话选择影响</p></div><div class="period-grid">
-        <article class="card period-card" aria-labelledby="today-heading"><div class="card-top"><h3 id="today-heading">今天</h3><span id="today-badge" class="badge">等待汇总</span></div><p id="today-date" class="period-date">按用量事件的本地日期统计</p><div class="period-values"><div class="period-money-block"><p id="today-money-label" class="period-value-label">API 等价费用（估算）</p><p id="today-amount" class="period-money mono">—</p><p id="today-credits" class="period-credit mono"></p><p id="today-credit-note" class="credit-coverage"></p></div><div class="period-token-block"><p class="period-value-label">已记录 Tokens</p><p id="today-tokens" class="period-value mono">—</p></div></div><p id="today-pricing-summary" class="model-scope-note"></p><section class="period-models" aria-labelledby="today-models-heading"><div class="period-models-header"><h4 id="today-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="today-models" class="model-list" hidden></ul><p id="today-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="today-coverage" class="period-coverage"><p id="today-count">等待统计数据</p><p id="today-note" class="period-note"></p></div></article>
+        <article class="card period-card" aria-labelledby="today-heading"><div class="card-top"><h3 id="today-heading">今天</h3><span id="today-badge" class="badge">等待汇总</span></div><p id="today-date" class="period-date">按用量事件的本地日期统计</p><div class="period-values"><div class="period-money-block"><p id="today-money-label" class="period-value-label">API 等价费用（估算）</p><p id="today-amount" class="period-money mono">—</p><p id="today-credits" class="period-credit mono"></p><p id="today-credit-note" class="credit-coverage"></p><p id="today-credit-billing" class="credit-billing"></p><p id="today-local-coverage" class="credit-coverage"></p><section id="today-official-observation" class="today-observation" aria-labelledby="today-observation-heading"><div class="card-top"><h4 id="today-observation-heading">官方余额观察净变化</h4><span id="today-observation-status" class="badge">未提供</span></div><p id="today-observation-change" class="observation-change mono">未提供</p><p id="today-observation-window" class="official-secondary"></p><p id="today-observation-balances" class="official-secondary mono"></p><p id="today-observation-note" class="official-secondary"></p><p class="official-secondary">只比较观察时段，不假定起点为午夜余额，不代表全天消费。充值、赠送、到期也会改变余额；周额度百分比不能与 Credits 相加。</p></section></div><div class="period-token-block"><p class="period-value-label">已记录 Tokens</p><p id="today-tokens" class="period-value mono">—</p></div></div><p id="today-pricing-summary" class="model-scope-note"></p><section class="period-models" aria-labelledby="today-models-heading"><div class="period-models-header"><h4 id="today-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="today-models" class="model-list" hidden></ul><p id="today-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="today-coverage" class="period-coverage"><p id="today-count">等待统计数据</p><p id="today-note" class="period-note"></p></div></article>
         <article class="card period-card" aria-labelledby="subscription-heading"><div class="card-top"><h3 id="subscription-heading">当前订阅周期</h3><span id="subscription-badge" class="badge">等待汇总</span></div><p id="subscription-date" class="period-date">按每月续订日划分</p><div class="period-values"><div class="period-money-block"><p id="subscription-money-label" class="period-value-label">API 等价费用（估算）</p><p id="subscription-amount" class="period-money mono">—</p><p id="subscription-credits" class="period-credit mono"></p><p id="subscription-credit-note" class="credit-coverage"></p></div><div class="period-token-block"><p class="period-value-label">已记录 Tokens</p><p id="subscription-tokens" class="period-value mono">—</p></div></div><p id="subscription-pricing-summary" class="model-scope-note"></p><section class="period-models" aria-labelledby="subscription-models-heading"><div class="period-models-header"><h4 id="subscription-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="subscription-models" class="model-list" hidden></ul><p id="subscription-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="subscription-coverage" class="period-coverage"><p id="subscription-count">等待统计数据</p><p id="subscription-note" class="period-note"></p><button id="configure-renewal" type="button" class="text-button period-action">设置每月续订日 ↗</button></div></article>
       </div><p id="credit-estimate-scope" class="model-scope-note credit-estimate-scope"></p><p id="period-unassigned" class="period-unassigned" hidden></p><details class="summary-method"><summary>统计范围与官方额度的区别</summary><p class="period-scope" style="margin:9px 3px 0">仅覆盖已登记日志中的用量，按记录中的 model 分组。官方统计还包含自动审阅、标题生成等本地未覆盖的功能。本地 Token 占比不能换算为官方额度或 Credits 占比；金额是估算价值，不是实际扣款。<a class="pricing-source" href="https://chatgpt.com/settings/usage?tab=analytics" target="_blank" rel="noopener noreferrer">查看官方额度分析 ↗</a></p></details></section>
       <section class="conversation-toolbar" aria-label="选择要查看的对话"><div class="conversation-select-wrap"><label for="conversation-select">正在查看的对话</label><select id="conversation-select" aria-describedby="conversation-filter-note" disabled><option value="">等待对话记录</option></select><p id="conversation-filter-note" class="conversation-toolbar-note">选定后会保持显示这段对话，不会跳到其他正在进行的对话。</p></div><button id="edit-conversation-alias" type="button" class="button conversation-alias-button" disabled>设置别名</button></section>
@@ -86,7 +87,7 @@
           <div class="form-row"><div class="field"><label for="exchange-cny">1 美元折合人民币</label><input id="exchange-cny" name="exchangeCNY" type="text" inputmode="decimal" placeholder="参考汇率" autocomplete="off" aria-describedby="exchange-hint"></div><div class="field"><label for="exchange-hkd">1 美元折合港元</label><input id="exchange-hkd" name="exchangeHKD" type="text" inputmode="decimal" placeholder="参考汇率" autocomplete="off" aria-describedby="exchange-hint"></div></div>
           <p id="exchange-hint" class="field-hint">参考汇率，可修改。美元换算值固定为 1；页面不会自动查询或更新汇率。</p>
         </div>
-        <div id="credit-scenario-settings" class="field credit-scenario-settings"><label for="credit-speed">本地 Credit 估算速度档位</label><select id="credit-speed" name="speedMode" aria-describedby="credit-speed-hint"><option value="standard">Standard</option><option value="fast">Fast</option><option value="ultrafast">UltraFast（支持的模型）</option><option value="auto">按记录；未知时取估算中点</option></select><p id="credit-speed-hint" class="field-hint">只改变本地购买 Credits 的估算场景，不修改 Codex 的实际速度、官方记录或余额。API 始终按 Standard；Ultra 思考强度与速度档位不同。</p></div>
+        <div id="credit-scenario-settings" class="field credit-scenario-settings"><label for="credit-speed">缺少速度记录时的默认估算</label><select id="credit-speed" name="speedMode" aria-describedby="credit-speed-hint"><option value="auto">Auto：未知速度取估算中点</option><option value="standard">Standard：默认场景</option><option value="fast">Fast：默认场景</option><option value="ultrafast">UltraFast：默认场景（支持的模型）</option></select><p id="credit-speed-hint" class="field-hint">可信日志速度优先，其次采用下面的日期确认，最后才使用这个默认场景。只改变本地 Credits 估算，不修改 Codex 的实际速度、官方记录或余额。API 始终按 Standard；Ultra 思考强度与速度档位不同。</p><fieldset class="speed-overrides"><legend>按日期确认缺失的速度</legend><div class="form-row"><div class="field"><label for="credit-override-date">日期</label><input id="credit-override-date" type="date" aria-describedby="credit-override-hint"></div><div class="field"><label for="credit-override-speed">这一天使用的速度</label><select id="credit-override-speed"><option value="standard">Standard</option><option value="fast">Fast</option><option value="ultrafast">UltraFast</option></select></div></div><button id="add-credit-override" class="button" type="button">添加 / 更新日期确认</button><p id="credit-override-hint" class="field-hint">仅影响所填日期中缺少可信速度记录的用量，属于用户确认，不是自动检测；不会套用到全部历史。更改随“保存设置”一起保存。</p><p id="credit-override-error" class="dialog-error" role="alert" hidden></p><ul id="credit-override-list" class="credit-override-list"></ul></fieldset></div>
         <div id="custom-settings" class="settings-section" hidden><div class="field"><label for="rate-per-million">每 100 万 Token 的折算值</label><input id="rate-per-million" name="ratePerMillion" type="text" inputmode="decimal" placeholder="留空则关闭自定义金额显示" autocomplete="off" aria-describedby="rate-hint"><p id="rate-hint" class="field-hint">按总 Token 统一折算，不区分模型、缓存或输出费率。数值使用上方的货币单位。</p></div></div>
         <div class="renewal-settings"><label for="subscription-renewal-day">每月续订日</label><input id="subscription-renewal-day" name="subscriptionRenewalDay" type="text" inputmode="numeric" maxlength="2" placeholder="填写 1 至 31，留空则不统计订阅周期" autocomplete="off" aria-describedby="renewal-hint"><p id="renewal-hint" class="field-hint">填写订阅每月续订的日期。周期从当天开始，到下次续订日前结束；当月没有这一天时按月末计算。这里只调整统计范围，不会修改你的订阅。</p></div>
         <div id="calculation-note" class="calculation-note">API 等价费用 = 各模型的普通输入、缓存输入、输出分别乘以 API 单价后相加，再换算货币。不使用每 Credit 的换算比例。</div>
@@ -106,6 +107,7 @@
   let preferredConversationId = null; try { preferredConversationId = localStorage.getItem(selectionStorageKey); } catch {}
   let quotaRefreshRequested = false, quotaRefreshError = null, quotaRefreshRetryAt = 0;
   const officialUsageRequests = new Map();
+  let speedOverrideDraft = {};
   const text = (id, value) => { $(id).textContent = value; };
   const validNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
   const fmt = value => validNumber(value) ? numberFormat.format(value) : '—';
@@ -232,7 +234,15 @@
     if (officialMode() && (rawDecimal(source?.credits) !== null || source?.standardRates?.unit === 'credits_per_million_tokens')) return {credits:singleValue(source.credits,source.creditsMax),status:rawDecimal(source.credits) === null ? 'unavailable' : source.status === 'partial' || source.partial ? 'partial' : 'estimated',unpricedTokens:source.unpricedTokens,standardRates:source.standardRates,rateDate:source.rateDate,historical:source.historical,note:'旧版记录中的本地 Credits 估算。'};
     return null;
   }
-  function creditScenario() { return ({standard:'Standard',fast:'Fast',ultrafast:'UltraFast',auto:'按记录；未知档位取估算中点'}[state?.settings?.speedMode || 'standard'] || 'Standard'); }
+  const speedNames = {standard:'Standard',fast:'Fast',ultrafast:'UltraFast',unknown:'速度未知'};
+  function creditScenario() { return ({standard:'Standard',fast:'Fast',ultrafast:'UltraFast',auto:'Auto（未知速度取中点）'}[state?.settings?.speedMode || 'auto'] || 'Auto（未知速度取中点）'); }
+  function validSpeedDate(value) { if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000')) return false; const date = new Date(value + 'T00:00:00Z'); return Number.isFinite(date.getTime()) && date.toISOString().slice(0,10) === value; }
+  function creditSpeedSummary(estimate) {
+    if (!Array.isArray(estimate?.speedBreakdown)) return '速度覆盖明细尚未提供；缺失记录默认 ' + creditScenario() + '。';
+    const rows = estimate.speedBreakdown.filter(row => row && Object.hasOwn(speedNames,row.speed) && ['recorded','date_override','fallback'].includes(row.source) && Number.isInteger(row.tokens) && row.tokens > 0);
+    if (!rows.length) return '速度覆盖：暂未提供有效明细。';
+    return '速度覆盖：' + rows.map(row => speedNames[row.speed] + ' · ' + ({recorded:'日志记录',date_override:'日期确认（用户设定）',fallback:row.speed === 'unknown' ? '缺失默认（中点估算）' : '缺失默认场景'}[row.source]) + ' ' + fmt(row.tokens) + ' Tokens').join('；') + '。仅描述速度依据，不代表均已计价。';
+  }
   function localCreditCoverage(estimate, incomplete = false) {
     const missing = validNumber(estimate?.unpricedTokens) ? estimate.unpricedTokens : 0, available = isDecimal(estimate?.credits);
     if (missing > 0) return 'Credits：' + fmt(missing) + ' Tokens 暂不可可靠换算，未计入 Credits 估算。';
@@ -245,6 +255,7 @@
     container.hidden = false; container.replaceChildren();
     container.append(node('span','local-credit-number',value ?? '暂不可用'),node('span','local-credit-label',' Credits（估算）'));
     if (partial && value !== null) container.append(node('span','local-credit-partial',' · 可计价部分'));
+    container.append(node('span','local-credit-basis','仅本地覆盖估算 · 非官方扣款'),node('span','credit-speed-summary',creditSpeedSummary(estimate)));
     container.title = (value === null ? 'Credits 暂不可用' : estimate.credits + ' Credits（本地估算原精度）') + ' · ' + creditScenario() + (estimate?.note ? ' · ' + estimate.note : '');
     container.classList.toggle('attention',value === null || partial);
     return estimate;
@@ -320,7 +331,7 @@
       if (creditRates?.unit === 'credits_per_million_tokens' && ['uncachedInput','cachedInput','output'].every(key => rawDecimal(creditRates[key]) !== null)) {
         const basis = rememberedDetails(JSON.stringify(['credit-rates',scope,modelId(entry)]),'model-rates credit-rates','Credit 费率与估算依据');
         basis.append(node('p','model-details','Standard 基准单价（Credits / 百万 Tokens）：普通输入 ' + decimalText(creditRates.uncachedInput) + ' · 缓存输入 ' + decimalText(creditRates.cachedInput) + ' · 输出 ' + decimalText(creditRates.output)));
-        basis.append(node('p','model-details','购买 Credits 的本地估算费率，不是官方账户用量。当前估算场景：' + creditScenario() + '；API 金额仍按 API Standard。'));
+        basis.append(node('p','model-details','购买 Credits 的本地估算费率，不是官方账户用量。可信日志速度优先，其次日期确认；缺失记录默认：' + creditScenario() + '。API 金额仍按 API Standard。'));
         const date = creditRates.rateDate || credit.rateDate, historical = creditRates.historical || credit.historical, source = node('p','model-details',date ? (historical ? '历史费率快照 · ' : '费率快照 · ') + date : historical ? '历史费率快照（日期未提供）' : ''), url = officialSource(creditRates.sourceUrl);
         if (url) { const link = node('a','pricing-source','Credit 费率来源 ↗'); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; if (source.textContent) source.append(document.createTextNode(' · ')); source.append(link); }
         if (source.textContent) basis.append(source); if (credit.note) basis.append(node('p','model-details',credit.note)); row.append(basis);
@@ -415,7 +426,7 @@
     text('pricing-context',turn ? turnModelLabel(turn) + ' · ' + pricingCaption(turn) : reading.error ? '历史记录读取异常，估算尚未就绪' : reading.pending ? '正在补读用量与模型信息' : '等待用量与模型信息');
     const rate = settings.ratePerMillion;
     if (api) text('rate-label','API Standard · USD / 百万 Tokens' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
-    else if (official) text('rate-label',({standard:'Standard',fast:'Fast',ultrafast:'UltraFast',auto:'按记录'}[settings.speedMode || 'standard'] || 'Standard') + ' 估算场景 · $' + (settings.usdPerCredit || '0.04') + ' / Credit' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
+    else if (official) text('rate-label','缺失速度默认 ' + creditScenario() + ' · $' + (settings.usdPerCredit || '0.04') + ' / Credit' + (currencyCode() !== 'USD' ? ' · 1 USD = ' + (settings.currencyPerUsd || '—') + ' ' + (settings.currencyName || currencyCode()) : ''));
     else if (rate === null || rate === undefined || rate === '') { const button = node('button','text-button','设置换算比例 ↗'); button.type = 'button'; button.addEventListener('click',openSettings); $('rate-label').replaceChildren(button); }
     else text('rate-label',(settings.currencySymbol || '') + rate + (settings.currencySymbol ? '' : ' ' + (settings.currencyName || '')) + ' / 百万 Token');
     let note = api ? '假设相同模型、相同 Token 用量与已观察到的缓存命中比例，按公开 API Standard 单价估算。' : official ? '按模型的输入、缓存输入和输出费率给出一个估算值。' : '按已记录的总 Token 与自定义比例折算；不使用官方 Credit 费率。';
@@ -491,6 +502,16 @@
     available.forEach((row,index) => { if (index) container.append(document.createTextNode(' ')); container.append(node('span',index ? 'official-money-secondary' : 'official-money-primary',officialMoneyText(row.value,row.symbol))); });
   }
   function officialError(value) { return typeof value === 'string' ? value : typeof value?.message === 'string' ? value.message : ''; }
+  function renderTodayObservation(fresh, error, pending) {
+    const observation = state?.officialCredits?.todayObservation, available = observation?.status === 'observed' && exactOfficialDecimal(observation.netChange,true) !== null && stamp(observation.startAt) !== null && stamp(observation.endAt) !== null && observation.endAt > observation.startAt;
+    const badge = $('today-observation-status'); badge.textContent = !available ? '未提供' : !connected ? '历史观察 · 已断线' : pending ? '刷新中 · 历史观察' : !fresh || error ? '历史观察 · 未确认最新' : '已记录的观察'; badge.className = 'badge' + (available && fresh && !pending ? ' good' : ' partial');
+    renderOfficialCreditValue($('today-observation-change'),available ? observation.netChange : null,true,true);
+    text('today-observation-window',available ? '观察时段 · ' + fullDateText(observation.startAt) + ' 至 ' + fullDateText(observation.endAt) : '今日尚无足够的余额观察，不推算净变化。');
+    const start = officialCreditText(observation?.startBalance,true), end = officialCreditText(observation?.endBalance,true);
+    text('today-observation-balances',available && start !== null && end !== null ? '记录余额 · ' + start + ' → ' + end + ' Credits' : '');
+    $('today-observation-balances').title = available && start !== null && end !== null ? observation.startBalance + ' → ' + observation.endBalance + ' Credits（来源原精度）' : '';
+    text('today-observation-note',typeof observation?.note === 'string' ? observation.note : '');
+  }
   function renderOfficialCredits() {
     const c = state?.officialCredits || {}, now = Date.now() / 1000, error = officialError(c.error) || quotaRefreshError?.message || '', balance = exactOfficialDecimal(c.balance,true), hasValue = balance !== null || c.unlimited === true;
     const fresh = connected && c.status === 'fresh' && !error && stamp(c.updatedAt) !== null && c.updatedAt <= now, pending = quotaRefreshRequested || state?.quota?.refreshing === true;
@@ -516,6 +537,7 @@
     $('official-credits-status').classList.toggle('attention',!fresh || !hasValue);
     text('official-credits-note',typeof c.note === 'string' ? c.note : ''); $('official-credits-note').hidden = !c.note;
     text('official-credits-error',error); $('official-credits-error').hidden = !error;
+    renderTodayObservation(fresh,error,pending);
   }
   function officialUsageTarget() { return activeView === 'history' && historyAll ? null : selectedConversation(); }
   function renderOfficialUsage() {
@@ -625,7 +647,7 @@
     text('metric-mode',apiMode() ? 'API Standard · 费用估算' : officialMode() ? '当前模式 · 本地 Credit 费用估算' : '当前模式 · 自定义单价');
     text('metric-assumptions',apiMode() ? '同模型与已记录 Token · 沿用已观察到的缓存命中比例 · 不含工具附加费和税费' : officialMode() ? '各模型 Credit 用量 × 每 Credit 美元价值 × 当前汇率' : '已记录总 Token × 自定义统一单价，不区分模型或缓存费率');
     text('metric-boundary','只覆盖已登记记录；不是订阅扣款或 API 账户余额。');
-    text('credit-estimate-scope','Credits（估算）独立按购买 Credits 费率计算 · ' + creditScenario() + ' 场景；不受货币影响，也不是官方余额、实际扣除或 API 金额除以单价。');
+    text('credit-estimate-scope','Credits 计价依据：可信日志速度 → 用户按日期确认 → 缺失速度默认 ' + creditScenario() + '。只估算本地已覆盖用量，不是官方余额、实际扣除，也不由 API 金额倒推；周额度百分比不能与 Credits 相加。');
     const c = state?.monitoring?.coverage, parts = [];
     if (validNumber(c?.registeredTasks)) parts.push('已登记 ' + fmt(c.registeredTasks) + ' 个任务');
     if (validNumber(c?.readableTasks)) parts.push('可读取 ' + fmt(c.readableTasks) + ' 个');
@@ -633,6 +655,11 @@
     if (validNumber(c?.backfillingTasks) && c.backfillingTasks > 0) parts.push(fmt(c.backfillingTasks) + ' 个正在补读');
     text('coverage-summary',parts.length ? parts.join(' · ') + (c.unreadableTasks > 0 || c.backfillingTasks > 0 ? '，汇总尚未补齐。' : '。仅代表已登记记录的覆盖情况。') : '记录覆盖范围尚未提供；金额仅表示已记录且可计价的用量。');
     $('coverage-summary').classList.toggle('attention',!parts.length || c.unreadableTasks > 0 || c.backfillingTasks > 0);
+    const day = state?.periods?.today?.startDate, override = validSpeedDate(day) ? state?.settings?.speedOverrides?.[day] : null, gaps = [];
+    if (validNumber(c?.unreadableTasks) && c.unreadableTasks > 0) gaps.push(fmt(c.unreadableTasks) + ' 个登记任务的记录无法读取');
+    if (validNumber(c?.backfillingTasks) && c.backfillingTasks > 0) gaps.push(fmt(c.backfillingTasks) + ' 个登记任务正在补读');
+    text('today-local-coverage','今天仅含已读到并能归属本地日期的用量。' + (gaps.length ? gaps.join('；') + '，其中今日用量尚未确认。' : !c ? '任务读取覆盖范围尚未提供。' : '仅覆盖已登记记录。') + '不能据此核对全部官方扣款。');
+    text('today-credit-billing',override && Object.hasOwn(speedNames,override) && override !== 'unknown' ? day + ' · ' + speedNames[override] + '（用户按日期确认，非自动检测；可信日志仍优先）' : '缺少可信速度记录时默认：' + creditScenario() + '；可在设置中确认某一天的速度。');
   }
   function render() { const focusedModel = document.activeElement?.dataset?.modelDetails, list = turns(), collection = conversations(list); ensureConversationSelection(collection); const selectedTurns = list.filter(t => t.threadId === selectedConversationId); renderMetricContext(); renderPeriods(); renderConversationPicker(collection); renderReadingNotice(collection); renderRunningConversations(list,collection); renderLatest(selectedTurns); renderOfficialUsage(); renderQuota(); renderChart(selectedTurns); renderHistory(historyAll ? list : selectedTurns); renderStatus(); restoreModelFocus(focusedModel); }
   async function request(path, options = {}) { const controller = new AbortController(), timer = setTimeout(() => controller.abort(),8000); try { const response = await fetch(path,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}); let payload; try { payload = await response.json(); } catch { throw new Error('本地服务返回了无法读取的数据。'); } if (!response.ok) throw new Error(payload.error?.message || payload.error || payload.message || '请求未完成，请稍后重试。'); return payload; } finally { clearTimeout(timer); } }
@@ -649,7 +676,16 @@
   function showToast(message) { text('toast',message); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; },3500); }
   function fullSettings() {
     const s = state?.settings || {};
-    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:['standard','fast','ultrafast','auto'].includes(s.speedMode) ? s.speedMode : 'standard',subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
+    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:['standard','fast','ultrafast','auto'].includes(s.speedMode) ? s.speedMode : 'auto',speedOverrides:s.speedOverrides && typeof s.speedOverrides === 'object' && !Array.isArray(s.speedOverrides) ? {...s.speedOverrides} : {},subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
+  }
+  function renderSpeedOverrides() {
+    const list = $('credit-override-list'); list.replaceChildren();
+    for (const [day,speed] of Object.entries(speedOverrideDraft).sort((a,b) => b[0].localeCompare(a[0]))) {
+      const item = node('li',''), remove = node('button','text-button','移除'); remove.type = 'button'; remove.setAttribute('aria-label','移除 ' + day + ' 的速度确认');
+      item.append(node('span','',day + ' · ' + (speedNames[speed] || '无效速度') + '（用户确认）'),remove);
+      remove.addEventListener('click',() => { delete speedOverrideDraft[day]; renderSpeedOverrides(); }); list.append(item);
+    }
+    if (!list.children.length) list.append(node('li','credit-override-empty','尚无日期确认；保留日志速度和默认估算。'));
   }
   function toggleCurrencyFields() {
     const code = $('currency-code').value, custom = $('pricing-mode').value === 'custom';
@@ -663,6 +699,7 @@
   }
   function openSettings() {
     const settings = fullSettings(); $('currency-name').value = settings.currencyName; $('currency-symbol').value = settings.currencySymbol; $('rate-per-million').value = settings.ratePerMillion ?? ''; $('pricing-mode').value = settings.pricingMode; $('currency-code').value = settings.currencyCode; $('usd-per-credit').value = settings.usdPerCredit; $('credit-speed').value = settings.speedMode; $('currency-per-usd').value = settings.currencyPerUsd; $('exchange-cny').value = settings.exchangeRates.CNY; $('exchange-hkd').value = settings.exchangeRates.HKD; $('subscription-renewal-day').value = settings.subscriptionRenewalDay ?? ''; togglePricingFields(); $('settings-error').hidden = true; $('settings-dialog').showModal();
+    speedOverrideDraft = {...settings.speedOverrides}; const day = state?.periods?.today?.startDate; $('credit-override-date').value = validSpeedDate(day) ? day : ''; $('credit-override-speed').value = ['standard','fast','ultrafast'].includes(speedOverrideDraft[day]) ? speedOverrideDraft[day] : 'standard'; $('credit-override-error').hidden = true; renderSpeedOverrides();
   }
   function changeTab(name, focus = false) { activeView = name; for (const id of ['overview','history']) { const selected = name === id; $(id + '-tab').setAttribute('aria-selected',String(selected)); $(id + '-tab').tabIndex = selected ? 0 : -1; $(id + '-panel').hidden = !selected; } renderConversationPicker(conversations()); renderOfficialUsage(); if (focus) $(name + '-tab').focus(); }
   $('overview-tab').addEventListener('click',() => changeTab('overview')); $('history-tab').addEventListener('click',() => changeTab('history')); $('view-history').addEventListener('click',() => { historyAll = false; renderHistory(turns().filter(t => t.threadId === selectedConversationId)); changeTab('history',true); });
@@ -682,6 +719,11 @@
   });
   $('open-settings').addEventListener('click',openSettings); $('pricing-mode').addEventListener('change',togglePricingFields); $('close-settings').addEventListener('click',() => $('settings-dialog').close()); $('cancel-settings').addEventListener('click',() => $('settings-dialog').close());
   $('configure-renewal').addEventListener('click',() => { openSettings(); $('subscription-renewal-day').focus(); });
+  $('add-credit-override').addEventListener('click',() => {
+    const day = $('credit-override-date').value, speed = $('credit-override-speed').value;
+    if (!validSpeedDate(day) || !['standard','fast','ultrafast'].includes(speed)) { text('credit-override-error','请选择有效日期，以及 Standard、Fast 或 UltraFast。'); $('credit-override-error').hidden = false; return; }
+    speedOverrideDraft[day] = speed; $('credit-override-error').hidden = true; renderSpeedOverrides();
+  });
   document.querySelectorAll('[data-settings-currency]').forEach(button => button.addEventListener('click',() => { $('currency-code').value = button.dataset.settingsCurrency; toggleCurrencyFields(); }));
   document.querySelectorAll('[data-currency-code]').forEach(button => button.addEventListener('click',async () => {
     const code = button.dataset.currencyCode; if (currencySaving || !state?.csrfToken || customMode() || code === currencyCode()) return;
@@ -697,10 +739,12 @@
     if (custom) submitted.ratePerMillion = rate || null;
     if (official) submitted.usdPerCredit = $('usd-per-credit').value.trim();
     submitted.speedMode = $('credit-speed').value;
+    submitted.speedOverrides = {...speedOverrideDraft};
     if (!custom) submitted.exchangeRates = {CNY:$('exchange-cny').value.trim(),USD:'1',HKD:$('exchange-hkd').value.trim()};
     if (code === 'CUSTOM') { submitted.currencyName = $('currency-name').value.trim(); submitted.currencySymbol = $('currency-symbol').value.trim(); if (!custom) submitted.currencyPerUsd = $('currency-per-usd').value.trim(); }
     else { submitted.currencyName = presetCurrencies[code].name; submitted.currencySymbol = presetCurrencies[code].symbol; submitted.currencyPerUsd = submitted.exchangeRates[code]; }
     $('settings-error').hidden = true;
+    if (Object.entries(submitted.speedOverrides).some(([day,speed]) => !validSpeedDate(day) || !['standard','fast','ultrafast'].includes(speed))) { text('settings-error','日期确认包含无效日期或速度，请修改后保存。'); $('settings-error').hidden = false; return; }
     if (renewal !== '' && (!/^\d{1,2}$/.test(renewal) || !validRenewalDay(Number(renewal)))) { text('settings-error','每月续订日请填写 1 至 31 的整数，或留空。'); $('settings-error').hidden = false; return; }
     submitted.subscriptionRenewalDay = renewal === '' ? null : Number(renewal);
     if (!['api','official','custom'].includes(mode) || !['standard','fast','ultrafast','auto'].includes(submitted.speedMode) || !submitted.currencyName || (custom && rate !== '' && !isDecimal(rate)) || (official && !positiveDecimal(submitted.usdPerCredit)) || (!custom && (!positiveDecimal(submitted.currencyPerUsd) || !positiveDecimal(submitted.exchangeRates.CNY) || !positiveDecimal(submitted.exchangeRates.HKD)))) { text('settings-error',custom ? '请填写单位名称，并输入非负数字作为自定义比例。' : official ? '请填写货币名称，并为 Credit 单价及汇率填写大于零的数字。' : '请填写货币名称，并为汇率填写大于零的数字。'); $('settings-error').hidden = false; return; }

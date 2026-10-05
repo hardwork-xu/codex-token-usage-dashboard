@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+from datetime import date, timedelta
 from email.message import Message
 import io
 import json
@@ -59,10 +60,11 @@ class SettingsTests(unittest.TestCase):
             with self.subTest(day=day), self.assertRaises(ValueError):
                 meter.validate_settings({"subscriptionRenewalDay": day})
 
-    def test_defaults_use_api_in_usd_and_confirmed_standard_speed(self):
+    def test_defaults_use_api_in_usd_without_assuming_standard_speed(self):
         result = meter.validate_settings({})
         self.assertEqual((result["pricingMode"], result["usdPerCredit"], result["currencyPerUsd"], result["speedMode"]),
-                         ("api", "0.04", "1", "standard"))
+                         ("api", "0.04", "1", "auto"))
+        self.assertEqual(result["speedOverrides"], {})
         self.assertEqual(result["currencyCode"], "USD")
         self.assertEqual(result["currencySymbol"], "$")
         self.assertEqual(result["exchangeRates"], {"CNY": "6.70842351", "USD": "1", "HKD": "7.84339018"})
@@ -124,6 +126,28 @@ class SettingsTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 meter.validate_settings(value)
 
+    def test_speed_overrides_accept_only_real_iso_dates_and_confirmed_speeds(self):
+        source = {"2024-02-29": "fast", "2026-10-04": "standard", "2026-10-05": "ultrafast"}
+        result = meter.validate_settings({"speedOverrides": source})
+        self.assertEqual(result["speedOverrides"], source)
+        result["speedOverrides"]["2026-10-04"] = "fast"
+        self.assertEqual(source["2026-10-04"], "standard")
+        self.assertEqual(meter.DEFAULT_SETTINGS["speedOverrides"], {})
+        for invalid in (None, [], True, "fast", {"2026-02-29": "fast"},
+                        {"20261005": "fast"}, {"2026-1-05": "fast"}, {"2026-W41-1": "fast"},
+                        {"2026-10-05T00:00:00": "fast"}, {True: "fast"},
+                        {"2026-10-05": "auto"}, {"2026-10-05": "priority"},
+                        {"2026-10-05": True}, {"2026-10-05": []}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                meter.validate_settings({"speedOverrides": invalid})
+
+    def test_speed_overrides_are_bounded_to_one_leap_year(self):
+        overrides = {(date(2024, 1, 1) + timedelta(days=i)).isoformat(): "fast" for i in range(366)}
+        self.assertEqual(meter.validate_settings({"speedOverrides": overrides})["speedOverrides"], overrides)
+        overrides["2025-01-01"] = "fast"
+        with self.assertRaises(ValueError):
+            meter.validate_settings({"speedOverrides": overrides})
+
     def test_unconfigured_rate_does_not_claim_free_usage(self):
         self.assertIsNone(meter.validate_settings({})["ratePerMillion"])
         self.assertIsNone(meter.validate_settings({"ratePerMillion": ""})["ratePerMillion"])
@@ -168,6 +192,53 @@ class OriginTests(unittest.TestCase):
 
     def test_non_ascii_token_is_denied_without_exception(self):
         self.assertFalse(self.handler(**{"Host": "127.0.0.1:9876", "X-Meter-Token": "é"}).allowed(write=True))
+
+
+class SettingsEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+        self.subject = meter.Meter(self.folder)
+
+    def post(self, settings):
+        body = json.dumps(settings).encode("utf-8")
+        handler = meter.Handler.__new__(meter.Handler)
+        handler.server = SimpleNamespace(meter=self.subject)
+        handler.path = "/api/settings"
+        handler.headers = Message()
+        handler.headers["Content-Type"] = "application/json"
+        handler.headers["Content-Length"] = str(len(body))
+        handler.rfile = io.BytesIO(body)
+        handler.allowed = mock.Mock(return_value=True)
+        handler.respond = mock.Mock()
+        handler.do_POST()
+        return handler.respond.call_args
+
+    def test_legacy_client_save_preserves_dates_and_explicit_empty_map_clears_them(self):
+        overrides = {"2026-10-04": "standard", "2026-10-05": "fast"}
+        meter.write_json(self.folder / "settings.json", meter.validate_settings({"speedMode": "standard", "speedOverrides": overrides}))
+        result = self.post({"currencyCode": "CNY"})
+        self.assertTrue(result.args[0]["ok"])
+        self.assertEqual(self.subject.settings()["speedOverrides"], overrides)
+        self.assertEqual(self.subject.settings()["speedMode"], "standard")
+        self.assertEqual(self.subject.settings()["currencyCode"], "CNY")
+        self.assertTrue(self.post({"speedOverrides": {}}).args[0]["ok"])
+        self.assertEqual(self.subject.settings()["speedOverrides"], {})
+
+    def test_full_year_of_speed_dates_can_round_trip_through_http(self):
+        overrides = {(date(2024, 1, 1) + timedelta(days=i)).isoformat(): "ultrafast" for i in range(366)}
+        settings = meter.validate_settings({"speedOverrides": overrides})
+        self.assertGreater(len(json.dumps(settings)), 4096)
+        self.assertTrue(self.post(settings).args[0]["ok"])
+        self.assertEqual(self.subject.settings(), settings)
+
+    def test_invalid_speed_dates_do_not_replace_saved_settings(self):
+        saved = meter.validate_settings({"speedOverrides": {"2026-10-05": "fast"}})
+        meter.write_json(self.folder / "settings.json", saved)
+        result = self.post({"speedOverrides": {"2026-02-29": "fast"}})
+        self.assertEqual(result.args[1], 400)
+        self.assertEqual(self.subject.settings(), saved)
 
 
 class LocalEndpointTests(unittest.TestCase):
@@ -217,7 +288,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(self.subject.settings(), meter.DEFAULT_SETTINGS)
 
     def test_snapshot_estimates_by_categories_at_confirmed_standard_point(self):
-        meter.write_json(self.folder / "settings.json", {"pricingMode": "official"})
+        meter.write_json(self.folder / "settings.json", {"pricingMode": "official", "speedMode": "standard"})
         turn = self.result["turns"][0]
         turn.update({"model": "gpt-6-astra", "serviceTier": None, "pricingMetadataStatus": "unknown", "quality": "complete",
                      "tokens": {"total": 105000, "input": 100000, "cachedInput": 90000,
@@ -256,13 +327,17 @@ class SnapshotTests(unittest.TestCase):
                 self.assertEqual(reloaded["currencyCode"], code)
                 self.assertEqual(reloaded["currencyPerUsd"], rates[code])
 
-    def test_old_v02_auto_settings_without_currency_code_migrate_to_standard(self):
+    def test_old_auto_setting_without_currency_code_is_not_reinterpreted_as_standard(self):
         legacy = {"currencyName": "美元", "currencySymbol": "$", "ratePerMillion": None,
                   "pricingMode": "official", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "auto"}
         meter.write_json(self.folder / "settings.json", legacy)
         migrated = self.subject.settings()
-        self.assertEqual((migrated["currencyCode"], migrated["speedMode"]), ("USD", "standard"))
+        self.assertEqual((migrated["currencyCode"], migrated["speedMode"]), ("USD", "auto"))
         self.assertEqual(migrated["usdPerCredit"], "0.04")
+
+    def test_explicit_saved_standard_setting_survives_new_auto_default(self):
+        meter.write_json(self.folder / "settings.json", {"pricingMode": "official", "speedMode": "standard"})
+        self.assertEqual(self.subject.settings()["speedMode"], "standard")
 
     def test_fx_reference_customization_tracks_any_rate_not_only_selected_currency(self):
         with mock.patch.object(meter.UsageLogReader, "read", return_value=self.result):

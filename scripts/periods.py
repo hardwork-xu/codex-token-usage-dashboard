@@ -5,7 +5,7 @@ import calendar
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
-from pricing import credit_estimate_summary, estimate_turn, validated_slices
+from pricing import credit_estimate_summary, estimate_turn, validated_slices, merge_speed_breakdowns
 
 
 _FIELDS = ("total", "input", "cachedInput", "cacheWriteInput", "output", "reasoningOutput")
@@ -93,13 +93,14 @@ def _format(value):
 
 def _credit_accumulator(partial=False):
     return {"total": Decimal(0), "available": False, "unpricedTokens": 0,
-            "partial": partial, "dates": set(), "mixedDates": False, "historical": False}
+            "partial": partial, "dates": set(), "mixedDates": False, "historical": False, "speedBreakdown": []}
 
 
 def _add_credit(target, estimate):
     if estimate["credits"] is not None:
         target["total"] += Decimal(estimate["credits"])
         target["available"] = True
+    target["speedBreakdown"].extend(estimate.get("speedBreakdown", []))
     target["unpricedTokens"] += estimate["unpricedTokens"]
     target["partial"] |= estimate["status"] != "estimated"
     if estimate["rateDate"]:
@@ -116,7 +117,8 @@ def _finish_credit(target, settings, *, rates=None, empty=False):
         unpriced_tokens=target["unpricedTokens"], partial=target["partial"], rates=rates,
         rate_date=next(iter(dates)) if len(dates) == 1 and not target["mixedDates"] else None,
         historical=target["historical"], estimate_basis="period",
-        speed_mode=settings.get("speedMode", "standard"),
+        speed_mode=settings.get("speedMode", "auto"),
+        speed_breakdown=merge_speed_breakdowns(target["speedBreakdown"]),
         note="本时段暂无已记录用量。" if empty else None)
 
 

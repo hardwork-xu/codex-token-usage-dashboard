@@ -80,6 +80,49 @@ FAST_MULTIPLIERS = {model: Decimal(2) for model in (
 ULTRAFAST_MULTIPLIERS = {"gpt-6-astra": Decimal(6)}
 
 
+def speed_evidence(turn, settings):
+    """Prefer observed tiers, then a dated user declaration, then a fallback.
+
+    A current account preference cannot prove a historical request's speed.
+    Dates come only from conserved usage slices, never from the turn start.
+    API priority/default are not aliases for Codex Fast/Standard.
+    """
+    supported = {"standard", "fast", "ultrafast"}
+    tier = turn.get("serviceTier")
+    if turn.get("pricingMetadataStatus") == "known" and isinstance(tier, str) and tier in supported:
+        return tier, "recorded"
+    day = turn.get("day")
+    overrides = settings.get("speedOverrides")
+    if isinstance(day, str) and isinstance(overrides, dict):
+        try:
+            valid_day = date.fromisoformat(day).isoformat() == day
+        except ValueError:
+            valid_day = False
+        if valid_day and isinstance(overrides.get(day), str) and overrides[day] in supported:
+            return overrides[day], "date_override"
+    fallback = settings.get("speedMode", "auto")
+    return fallback if isinstance(fallback, str) else "invalid", "fallback"
+
+
+def merge_speed_breakdowns(rows):
+    counts = {}
+    for row in rows:
+        key = (row["speed"], row["source"])
+        counts[key] = counts.get(key, 0) + row["tokens"]
+    return [{"speed": speed, "source": source, "tokens": count}
+            for (speed, source), count in sorted(counts.items()) if count]
+
+
+def _speed_rows(turn, settings):
+    tokens = turn.get("tokens")
+    total = tokens.get("total") if isinstance(tokens, dict) else None
+    if type(total) is not int or total < 0:
+        return []
+    speed, source = speed_evidence(turn, settings)
+    return [{"speed": speed if speed in {"standard", "fast", "ultrafast"} else "unknown",
+             "source": source, "tokens": total}]
+
+
 def _credit_rate_date(model):
     return HISTORICAL_RATE_DATE if model in HISTORICAL_CREDIT_MODELS else RATE_DATE
 
@@ -245,42 +288,30 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
             if mode == "api":
                 return _price_api(turn, settings, result, incoming, cached, outgoing, total, money_text)
 
-            speed = settings.get("speedMode", "standard")
+            speed, speed_source = speed_evidence(turn, settings)
             fast = FAST_MULTIPLIERS.get(model)
             ultrafast = ULTRAFAST_MULTIPLIERS.get(model)
             multiplier, multiplier_max = Decimal(1), None
             notes: list[str] = []
-            if speed == "standard":
-                result["estimateBasis"] = "standard"
-                notes.append("按你确认的 Standard（非加速）模式计算。")
-            elif speed == "fast":
-                if fast is None:
-                    raise ValueError("该模型没有已核实的 Fast 倍率。")
-                multiplier = fast
-                result["estimateBasis"] = "fast"
-                notes.append("按用户选择的 Fast 场景估算，不据此推断实际档位。")
-            elif speed == "ultrafast":
-                if ultrafast is None:
-                    raise ValueError("该模型没有已核实的 Ultrafast 倍率。")
-                multiplier = ultrafast
-                result["estimateBasis"] = "ultrafast"
-                notes.append("按用户选择的 Ultrafast 场景估算，不据此推断实际档位或使用资格。")
-            elif speed == "auto":
-                # Explicit supported speed IDs can select a rate. Do not map
-                # transcript `default` or API `priority` to Standard/Fast.
-                if metadata == "known" and turn.get("serviceTier") == "ultrafast":
-                    if ultrafast is None:
-                        raise ValueError("该模型没有已核实的 Ultrafast 倍率。")
-                    multiplier = ultrafast
-                    result["estimateBasis"] = "ultrafast"
-                    notes.append("按记录中的 Ultrafast 档位估算。")
-                elif metadata == "known" and turn.get("serviceTier") == "fast":
+            label = {"standard": "Standard（非加速）", "fast": "Fast", "ultrafast": "Ultrafast"}.get(speed)
+            if speed in {"standard", "fast", "ultrafast"}:
+                if speed == "fast":
                     if fast is None:
                         raise ValueError("该模型没有已核实的 Fast 倍率。")
                     multiplier = fast
-                    result["estimateBasis"] = "fast"
-                    notes.append("按记录中的 Fast 档位估算。")
-                elif fast is not None:
+                elif speed == "ultrafast":
+                    if ultrafast is None:
+                        raise ValueError("该模型没有已核实的 Ultrafast 倍率。")
+                    multiplier = ultrafast
+                result["estimateBasis"] = speed
+                if speed_source == "recorded":
+                    notes.append("按记录中的 " + label + " 档位估算。")
+                elif speed_source == "date_override":
+                    notes.append("速度记录缺失，按用户确认的该日 " + label + " 档位估算。")
+                else:
+                    notes.append("速度记录缺失，按用户选择的 " + label + " 默认场景估算，不据此推断实际档位。")
+            elif speed == "auto":
+                if fast is not None:
                     multiplier_max = fast
                     result["estimateBasis"] = "midpoint"
                     notes.append("速度档位未确认，仅按 Standard 与 Fast 场景的中点估算，不含 Ultrafast。")
@@ -311,7 +342,7 @@ def _estimate_single(turn: dict, settings: dict, *, _unrounded=False) -> dict:
                 **components, "multiplier": str(multiplier),
                 "multiplierMax": None,
                 "usdPerCredit": str(usd_per_credit), "currencyPerUsd": str(currency_per_usd),
-                "speedSourceUrl": SPEED_SOURCE_URL,
+                "speedSourceUrl": SPEED_SOURCE_URL, "speedEvidence": speed_source,
                 "speedRateDate": _credit_rate_date(model), "billingBasis": "purchased_credits",
             }
             if result["historical"]:
@@ -429,8 +460,9 @@ def _model_groups(parts, turn, mode="official"):
             "model": model, "label": RATES[model][0] if model in RATES else model or "未确认模型",
             "tokens": dict.fromkeys(TOKEN_FIELDS, 0), "turnCount": 1, "partial": False,
             "unpricedTokens": 0, "apiContextUncertainTokens": 0, "apiLongContextTokens": 0,
-            "standardRates": standard_rates(model, mode), **{key: None for key in MONEY_FIELDS},
+            "standardRates": standard_rates(model, mode), "speedBreakdown": [], **{key: None for key in MONEY_FIELDS},
         })
+        group["speedBreakdown"].extend(price.get("speedBreakdown", []))
         group["apiContextUncertainTokens"] += price.get("apiContextUncertainTokens", 0)
         group["apiLongContextTokens"] += price.get("apiLongContextTokens", 0)
         for key in TOKEN_FIELDS:
@@ -443,6 +475,7 @@ def _model_groups(parts, turn, mode="official"):
             if price[key] is not None:
                 group[key] = (group[key] or Decimal(0)) + Decimal(price[key])
     for group in groups.values():
+        group["speedBreakdown"] = merge_speed_breakdowns(group["speedBreakdown"])
         for key in MONEY_FIELDS:
             if group[key] is not None:
                 group[key] = _text(group[key])
@@ -461,9 +494,11 @@ def _estimate_turn(turn: dict, settings: dict) -> dict:
         slices, invalid = None, True
     if slices is None:
         source = {**turn, "model": safe_model(turn.get("model"))}
+        source.pop("day", None)  # Only validated event slices establish a pricing day.
         if invalid:
             source.update(model=None, serviceTier=None, pricingMetadataStatus="unknown", quality="partial")
         price = _estimate_single(source, settings)
+        price["speedBreakdown"] = _speed_rows(source, settings)
         with localcontext() as context:
             context.prec = 100
             price["models"] = _model_groups([(source, price)], source, mode)
@@ -477,22 +512,25 @@ def _estimate_turn(turn: dict, settings: dict) -> dict:
     for item in slices:
         # Do not spread an unsupported cache-write category to independently
         # observed, priceable calls when merging days or context evidence.
-        key = (item["model"], item["serviceTier"], item["pricingMetadataStatus"], item["apiContext"],
+        key = (speed_evidence(item, settings) if mode == "official" else None, item["model"], item["serviceTier"], item["pricingMetadataStatus"], item["apiContext"],
                bool(item["tokens"]["cacheWriteInput"]))
         source = merged.setdefault(key, {**item, "tokens": dict.fromkeys(TOKEN_FIELDS, 0),
                                         "quality": turn.get("quality"), "status": turn.get("status")})
         for field in TOKEN_FIELDS:
             source["tokens"][field] += item["tokens"][field]
-    parts = [(source, _estimate_single(source, settings, _unrounded=True)) for source in merged.values() if any(source["tokens"].values())]
+    parts = [(source, {**_estimate_single(source, settings, _unrounded=True),
+                       "speedBreakdown": _speed_rows(source, settings)})
+             for source in merged.values() if any(source["tokens"].values())]
     if not parts:
         price = _estimate_single(turn, settings)
-        price.update(models=[], unpricedTokens=0)
+        price.update(models=[], unpricedTokens=0, speedBreakdown=[])
         return price
     with localcontext() as context:
         context.prec = 100
         groups = _model_groups(parts, turn, mode)
         price = dict(parts[0][1]) if len(parts) == 1 else _base(turn, mode != "custom", api=mode == "api")
         price["models"] = groups
+        price["speedBreakdown"] = merge_speed_breakdowns([row for group in groups for row in group["speedBreakdown"]])
         price["unpricedTokens"] = sum(group["unpricedTokens"] for group in groups)
         price["apiContextUncertainTokens"] = sum(group["apiContextUncertainTokens"] for group in groups)
         price["apiLongContextTokens"] = sum(group["apiLongContextTokens"] for group in groups)
@@ -534,10 +572,10 @@ def _estimate_turn(turn: dict, settings: dict) -> dict:
 
 def credit_estimate_summary(credits, *, unpriced_tokens=0, partial=False, rates=None,
                             rate_date=None, historical=False, estimate_basis=None,
-                            speed_mode="standard", note=None):
+                            speed_mode="auto", speed_breakdown=None, note=None):
     """Describe an independently computed credit subtotal without currency fields."""
     status = "unavailable" if credits is None else "partial" if partial or unpriced_tokens else "estimated"
-    notes = ["按各模型购买 Credits 费率和保存的速度场景估算，不代表官方实际扣除、余额或订阅内含额度。"]
+    notes = ["按各模型购买 Credits 费率估算；速度优先使用记录，其次用户确认日期，最后默认场景。不代表官方实际扣除、余额或订阅内含额度。"]
     if speed_mode == "auto":
         notes.append("速度未确认的部分仅按 Standard 与 Fast 场景的中点估算，不含 Ultrafast。")
     if unpriced_tokens:
@@ -552,7 +590,8 @@ def credit_estimate_summary(credits, *, unpriced_tokens=0, partial=False, rates=
         notes.append(note)
     return {"credits": credits, "status": status, "unpricedTokens": unpriced_tokens,
             "note": " ".join(notes), "standardRates": rates, "rateDate": rate_date,
-            "historical": historical, "estimateBasis": estimate_basis}
+            "historical": historical, "estimateBasis": estimate_basis,
+            "speedBreakdown": speed_breakdown or []}
 
 
 def estimate_turn(turn: dict, settings: dict) -> dict:
@@ -566,9 +605,15 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
     turn = turn if isinstance(turn, dict) else {}
     settings = settings if isinstance(settings, dict) else {}
     price = _estimate_turn(turn, settings)
-    speed_mode = settings.get("speedMode", "standard")
+    # Speed evidence belongs to Credits only; API/custom pricing remains independent.
+    if settings.get("pricingMode", "official") != "official":
+        price.pop("speedBreakdown", None)
+        for row in price["models"]:
+            row.pop("speedBreakdown", None)
+    speed_mode = settings.get("speedMode", "auto")
     credit_price = _estimate_turn(turn, {"pricingMode": "official", "speedMode": speed_mode,
-                                        "usdPerCredit": "1", "currencyPerUsd": "1"})
+                                        "usdPerCredit": "1", "currencyPerUsd": "1",
+                                        "speedOverrides": settings.get("speedOverrides", {})})
     credit_rows = {}
     for row in credit_price["models"]:
         rates = row["standardRates"]
@@ -576,6 +621,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
             row["credits"], unpriced_tokens=row["unpricedTokens"], partial=row["partial"],
             rates=rates, rate_date=rates["rateDate"] if rates else None,
             historical=bool(rates and rates["historical"]), speed_mode=speed_mode,
+            speed_breakdown=row["speedBreakdown"],
             estimate_basis=credit_price["estimateBasis"] if len(credit_price["models"]) == 1 else None)
     unpriced = credit_price["unpricedTokens"]
     if not credit_rows and credit_price["credits"] is None:
@@ -595,6 +641,7 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
         rate_date=next(iter(dates)) if len(dates) == 1 else None,
         historical=any(rates["historical"] for rates in known_rates),
         estimate_basis=credit_price["estimateBasis"], speed_mode=speed_mode,
+        speed_breakdown=credit_price["speedBreakdown"],
         note="本题仍在运行，这是截至目前的估算。" if turn.get("status") == "running" else None)
     for row in price["models"]:
         # Both passes share model attribution, even if one pricing mode cannot

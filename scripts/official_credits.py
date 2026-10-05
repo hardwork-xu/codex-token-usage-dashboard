@@ -7,6 +7,7 @@ establish how much of a grant was spent rather than expired or adjusted.
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, localcontext
+from datetime import datetime
 import hashlib
 import math
 import re
@@ -82,8 +83,15 @@ def record_balance(ledger, quota):
     point = {"observedAt": now, "balance": balance}
     if rows and now < rows[-1]["observedAt"]:
         return ledger
-    # Identical polls do not fill the history. Baseline survives truncation.
-    if not rows or Decimal(rows[-1]["balance"]) != Decimal(balance):
+    new_day = False
+    if rows:
+        try:
+            new_day = datetime.fromtimestamp(now).date() != datetime.fromtimestamp(rows[-1]["observedAt"]).date()
+        except (ValueError, OverflowError, OSError):
+            pass
+    # Retain the first actual observation each local day even without a balance
+    # change. Repeated same-day polls stay deduplicated; no midnight is inferred.
+    if not rows or new_day or Decimal(rows[-1]["balance"]) != Decimal(balance):
         if rows and now == rows[-1]["observedAt"]:
             rows[-1] = point
         else:
@@ -91,6 +99,60 @@ def record_balance(ledger, quota):
     ledger[scope] = {"baseline": baseline[0] if baseline else point,
                      "history": rows[-MAX_HISTORY:]}
     return ledger
+
+
+def _today_observation(entry, quota, *, now):
+    """Compare actual same-day observations, never infer a midnight balance."""
+    result = {"status": "unavailable", "startAt": None, "endAt": None,
+              "startBalance": None, "endBalance": None, "netChange": None,
+              "note": "今天还没有足够的账户余额观测；不会推算零点余额或实际消耗。"}
+    balance = normalize_credits(quota.get("credits"))
+    updated = quota.get("updatedAt")
+    if (not isinstance(entry, dict) or not timestamp(now) or not timestamp(updated)
+            or updated > now or balance["balance"] is None or balance["unlimited"] is True):
+        return result
+    raw = entry.get("history")
+    if not isinstance(raw, list):
+        return result
+    # Fail closed for this comparison instead of quietly sorting corrupt data
+    # into a plausible change. The persisted ledger itself is not modified.
+    points = []
+    baseline = entry.get("baseline")
+    if baseline is not None:
+        points.append(baseline)
+    for index, row in enumerate(raw[-MAX_HISTORY:]):
+        if index == 0 and points and row == points[-1]:
+            continue
+        points.append(row)
+    checked = []
+    for row in points:
+        if (not isinstance(row, dict) or not timestamp(row.get("observedAt"))
+                or row["observedAt"] > now or credit_number(row.get("balance")) is None
+                or checked and row["observedAt"] <= checked[-1]["observedAt"]):
+            return result
+        checked.append({"observedAt": row["observedAt"], "balance": row["balance"]})
+    current = {"observedAt": updated, "balance": balance["balance"]}
+    if checked and updated <= checked[-1]["observedAt"]:
+        if (updated != checked[-1]["observedAt"]
+                or Decimal(balance["balance"]) != Decimal(checked[-1]["balance"])):
+            return result
+    else:
+        checked.append(current)
+    try:
+        day = datetime.fromtimestamp(now).date()
+        today = [row for row in checked if datetime.fromtimestamp(row["observedAt"]).date() == day]
+    except (ValueError, OverflowError, OSError):
+        return result
+    if len(today) < 2:
+        return result
+    start, end = today[0], today[-1]
+    with localcontext() as context:
+        context.prec = 60
+        change = format(Decimal(end["balance"]) - Decimal(start["balance"]), "f")
+    result.update(status="observed", startAt=start["observedAt"], endAt=end["observedAt"],
+                  startBalance=start["balance"], endBalance=end["balance"], netChange=change,
+                  note="仅比较今天实际观测时段内的余额净变化，不是零点至今的消耗；可能包含充值、到期或调整。")
+    return result
 
 
 def credit_view(quota, ledger, settings, *, now, validated=False):
@@ -120,6 +182,7 @@ def credit_view(quota, ledger, settings, *, now, validated=False):
                     pass
     scope = quota.get("accountScope")
     entry = ledger.get(scope) if isinstance(ledger, dict) and scope else None
+    result["todayObservation"] = _today_observation(entry, quota, now=now)
     if isinstance(entry, dict):
         rows = _observations(entry.get("history"))
         baseline = _observations([entry.get("baseline")])
@@ -182,7 +245,7 @@ def fetch_thread_usage(thread_id, command):
     try:
         with JsonRpcProcess([*command, "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.10.1"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.11.0"}}})
             initialized = False
             for response in rpc.responses():
                 if type(response.get("id")) is not int:

@@ -115,7 +115,7 @@ class IndependentCreditTests(unittest.TestCase):
                 self.assertEqual(result["usd"], "0.440000")
                 self.assertEqual(result["creditEstimate"]["credits"], credits)
         result = estimate_turn(turn(), {"pricingMode": "api"})
-        self.assertEqual(result["creditEstimate"]["credits"], "11.000000")
+        self.assertEqual(result["creditEstimate"]["credits"], "16.500000")
         result = self.estimate(turn(fragment(tier="fast")), speedMode="auto")
         self.assertEqual(result["creditEstimate"]["credits"], "22.000000")
 

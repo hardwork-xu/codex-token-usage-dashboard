@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 from copy import deepcopy
+from datetime import date
 import decimal
 import json
 import math
@@ -35,7 +36,8 @@ CURRENCIES = {"CNY": ("人民币", "¥"), "USD": ("美元", "$"), "HKD": ("港�
 FX_REFERENCE = {"sourceUrl": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html",
                 "date": "2026-09-14", "label": "欧洲央行参考汇率"}
 DEFAULT_SETTINGS = {"currencyName": "美元", "currencySymbol": "$", "ratePerMillion": None,
-                    "pricingMode": "api", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "standard",
+                    "pricingMode": "api", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "auto",
+                    "speedOverrides": {},
                     "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None}
 QUOTA_STALE_SECONDS = 120
 QUOTA_REFRESH_COOLDOWN = 30
@@ -173,7 +175,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.10.1"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.11.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -293,6 +295,18 @@ def validate_settings(value):
         if selected not in choices:
             raise ValueError("计价方式或速度选项无效")
         out[key] = selected
+    overrides = value.get("speedOverrides", {})
+    if not isinstance(overrides, dict) or len(overrides) > 366:
+        raise ValueError("按日速度设置应为日期映射，最多保存 366 天")
+    out["speedOverrides"] = {}
+    for day, speed in overrides.items():
+        try:
+            valid_day = isinstance(day, str) and len(day) == 10 and date.fromisoformat(day).isoformat() == day
+        except ValueError:
+            valid_day = False
+        if not valid_day or speed not in ("standard", "fast", "ultrafast"):
+            raise ValueError("按日速度设置需要有效的 YYYY-MM-DD 日期和 Standard、Fast 或 Ultrafast")
+        out["speedOverrides"][day] = speed
     for key, limit in (("currencyName", 24), ("currencySymbol", 8)):
         text = value.get(key, DEFAULT_SETTINGS[key])
         if not isinstance(text, str) or not text.strip() or len(text) > limit or any(ord(c) < 32 for c in text):
@@ -443,10 +457,6 @@ class Meter:
                 # has no conversion to migrate, so use the new USD default.
                 saved = ({**saved, "pricingMode": "custom"} if saved.get("ratePerMillion") not in (None, "")
                          else dict(DEFAULT_SETTINGS))
-            if isinstance(saved, dict) and "currencyCode" not in saved:
-                # Migrate legacy meter settings to the bundled non-Fast default.
-                # This only updates meter settings, not Codex settings.
-                saved = {**saved, "speedMode": "standard"}
             return validate_settings(saved)
         except ValueError:
             return deepcopy(DEFAULT_SETTINGS)
@@ -592,7 +602,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.10.1"
+    server_version = "CodexUsageMeter/0.11.0"
 
     def log_message(self, *_):
         pass
@@ -634,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_titles, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.10.1", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.11.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -651,7 +661,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond({"error": "不存在"}, 404)
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size < 1 or size > 4096 or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+            # A complete, bounded year of date-specific speed confirmations
+            # exceeds the original 4 KiB settings payload limit.
+            limit = 16384 if self.path == "/api/settings" else 4096
+            if size < 1 or size > limit or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("请求格式无效")
             value = json.loads(self.rfile.read(size))
             if self.path == "/api/official-usage-refresh":
@@ -660,8 +673,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond({"ok": True, "refresh": self.server.meter.start_official_usage_refresh(value["threadId"])})
             if self.path == "/api/conversation-label":
                 return self.respond(set_conversation_label(self.server.meter.folder, value))
-            settings = validate_settings(value)
-            write_json(self.server.meter.folder / "settings.json", settings)
+            with locked(self.server.meter.folder, "settings"):
+                if isinstance(value, dict):
+                    # Older clients omit new fields. Saving a currency or one
+                    # speed setting must preserve other confirmed history;
+                    # an explicit speedOverrides={} clears the dates.
+                    value = {**self.server.meter.settings(), **value}
+                settings = validate_settings(value)
+                write_json(self.server.meter.folder / "settings.json", settings)
             self.respond({"ok": True, "settings": settings})
         except (ValueError, UnicodeError) as exc:
             self.respond({"error": str(exc)}, 400)
@@ -891,7 +910,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.10.1"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.11.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

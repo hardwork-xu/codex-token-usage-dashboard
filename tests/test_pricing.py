@@ -64,7 +64,7 @@ class PricingTests(unittest.TestCase):
     def test_default_and_priority_are_not_inferred_as_actual_speed(self):
         self.settings["speedMode"] = "auto"
         self.turn["pricingMetadataStatus"] = "known"
-        for tier in (None, "default", "priority", "standard", "other"):
+        for tier in (None, "default", "priority", "other"):
             with self.subTest(tier=tier):
                 self.turn["serviceTier"] = tier
                 result = self.estimate()
@@ -228,11 +228,11 @@ class PricingTests(unittest.TestCase):
                 self.assertEqual(result["credits"], "11.000000")
                 self.assertNotIn("中点", result["note"])
 
-    def test_default_speed_follows_confirmed_non_fast_preference(self):
+    def test_default_speed_does_not_assume_standard_without_confirmation(self):
         self.settings.pop("speedMode")
         result = self.estimate()
-        self.assertEqual(result["estimateBasis"], "standard")
-        self.assertEqual(result["credits"], "11.000000")
+        self.assertEqual(result["estimateBasis"], "midpoint")
+        self.assertEqual(result["credits"], "16.500000")
 
     def test_unknown_models_and_aliases_fail_closed(self):
         for model in (None, "gpt-5.3-codex-spark", "gpt-6-astra-latest", "gpt-5.6", "unknown"):
