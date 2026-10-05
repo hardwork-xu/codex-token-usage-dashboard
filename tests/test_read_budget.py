@@ -202,7 +202,11 @@ class SnapshotBudgetTests(unittest.TestCase):
         event_day = datetime.fromisoformat("2026-09-21T12:00:00+00:00").astimezone().date()
         aggregate = partial(meter.summarize_periods, now=event_day)
         expected = sum((index + 1) * 100 for index in range(51))
+        # This test checks allocation, while ReaderBudgetTests exercises real
+        # deadline yields with an advancing clock. Host scheduling must not
+        # decide whether these five-record fixtures finish their first pass.
         with mock.patch.object(meter, "UsageLogReader", side_effect=factory), \
+                mock.patch.object(usage_log.time, "monotonic", return_value=0), \
                 mock.patch.object(meter, "summarize_periods", side_effect=aggregate):
             for step in range(4):
                 phase[0] = step
