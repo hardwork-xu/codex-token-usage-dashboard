@@ -241,6 +241,65 @@ class SettingsEndpointTests(unittest.TestCase):
         self.assertEqual(self.subject.settings(), saved)
 
 
+class HookRegistrationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+
+    def log(self, name, thread_id):
+        path = self.folder / (name + ".jsonl")
+        path.write_text(json.dumps({"type": "session_meta", "payload": {"id": thread_id}}) + "\n",
+                        encoding="utf-8")
+        return str(path)
+
+    def event(self, parent_path, child_path, *, parent_id="parent", child_id="child"):
+        return {"hook_event_name": "SubagentStop", "session_id": parent_id,
+                "transcript_path": parent_path, "agent_id": child_id,
+                "agent_transcript_path": child_path,
+                "last_assistant_message": "private message must not be retained"}
+
+    def registry(self):
+        return meter.read_json(self.folder / "registry.json", {})
+
+    def test_missing_parent_does_not_prevent_valid_child_registration(self):
+        event = self.event(str(self.folder / "missing.jsonl"), self.log("child", "child"))
+        meter.handle_hook(self.folder, event)
+        self.assertEqual(set(self.registry()), {"child"})
+        self.assertNotIn("private message", (self.folder / "registry.json").read_text())
+
+    def test_mismatched_parent_does_not_prevent_valid_child_registration(self):
+        event = self.event(self.log("foreign", "different-parent"), self.log("child", "child"))
+        meter.handle_hook(self.folder, event)
+        self.assertEqual(set(self.registry()), {"child"})
+
+    def test_missing_child_preserves_successful_parent_registration(self):
+        event = self.event(self.log("parent", "parent"), str(self.folder / "missing.jsonl"))
+        meter.handle_hook(self.folder, event)
+        self.assertEqual(set(self.registry()), {"parent"})
+
+    def test_child_agent_id_is_not_replaced_by_unverified_transcript_id(self):
+        event = self.event(self.log("parent", "parent"), self.log("child", "actual-thread"),
+                           child_id="different-agent-id")
+        meter.handle_hook(self.folder, event)
+        self.assertEqual(set(self.registry()), {"parent"})
+
+    def test_replayed_subagent_hook_keeps_one_entry_per_verified_task(self):
+        event = self.event(self.log("parent", "parent"), self.log("child", "child"))
+        meter.handle_hook(self.folder, event)
+        first = self.registry()
+        meter.handle_hook(self.folder, event)
+        self.assertEqual(self.registry(), first)
+        self.assertEqual(set(first), {"parent", "child"})
+
+    def test_invalid_hook_payloads_do_not_read_or_register_transcripts(self):
+        with mock.patch.object(meter, "register") as register:
+            for event in (None, [], {"hook_event_name": "Unexpected"},
+                          self.event(None, [], parent_id=True, child_id={})):
+                meter.handle_hook(self.folder, event)
+            register.assert_not_called()
+
+
 class LocalEndpointTests(unittest.TestCase):
     def test_only_exact_loopback_endpoints_are_allowed(self):
         for path in ("/", "/health", "/api/state"):

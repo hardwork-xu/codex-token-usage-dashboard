@@ -27,6 +27,7 @@ RUNTIME_OWNER = ".usage-meter-runtime.json"
 RUNTIME_FILES = (
     "scripts/meter.py", "scripts/usage_log.py", "scripts/pricing.py", "scripts/periods.py",
     "scripts/conversations.py", "scripts/platform_support.py", "scripts/rpc_transport.py", "scripts/official_credits.py",
+    "scripts/descendants.py",
     "scripts/service_lifecycle.py", "scripts/browser_access.py", "web/index.html",
     ".codex-plugin/plugin.json",
 )
@@ -87,11 +88,14 @@ def _runtime_payload(root, *, managed=False):
     # exact owned payload for atomic replacement/rollback, without accepting a
     # missing module from a runtime that should already contain it.
     legacy_credits = False
+    legacy_descendants = False
     if managed:
         try:
             old_manifest = json.loads(_read_existing(root / ".codex-plugin/plugin.json", 32768) or b"{}")
             old_version = old_manifest.get("version", "").split("+")[0]
             legacy_credits = old_manifest.get("name") == "codex-usage-meter" and bool(re.fullmatch(r"0\.[0-9]\.[0-9]+", old_version))
+            match = re.fullmatch(r"0\.([0-9]+)\.[0-9]+", old_version)
+            legacy_descendants = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 12)
         except (ValueError, AttributeError):
             pass
     for name in RUNTIME_FILES:
@@ -100,6 +104,8 @@ def _runtime_payload(root, *, managed=False):
         raw = _read_existing(root / relative, 2 * 1024 * 1024)
         if raw is None:
             if managed and legacy_credits and name == "scripts/official_credits.py":
+                continue
+            if managed and legacy_descendants and name == "scripts/descendants.py":
                 continue
             raise RuntimeError("插件运行文件不完整，请重新安装完整源码")
         payload[name] = raw

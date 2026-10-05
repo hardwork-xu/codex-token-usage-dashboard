@@ -119,6 +119,26 @@ class BrowserAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
             access.install(self.folder)
 
+    def test_descendant_runtime_upgrade_preserves_older_owned_install(self):
+        self.seed_installed()
+        manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["version"] = "0.11.0+local.1"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        (self.runtime / "scripts/descendants.py").unlink()
+        self.assertEqual(access.install(self.folder)["port"], 51234)
+        self.assertTrue((self.runtime / "scripts/descendants.py").is_file())
+
+    def test_new_runtime_missing_descendant_module_is_rejected(self):
+        self.seed_installed()
+        manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["version"] = "0.12.0"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        (self.runtime / "scripts/descendants.py").unlink()
+        with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
+            access.install(self.folder)
+
     def test_no_saved_endpoint_uses_default_or_explicit_port(self):
         self.endpoint.unlink()
         self.assertEqual(access.install(self.folder, port=51345)["port"], 51345)

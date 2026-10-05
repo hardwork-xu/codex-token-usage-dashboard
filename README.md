@@ -157,7 +157,7 @@ Windows 在 PowerShell 中将上述命令的 `python3` 换成 `py -3`。源码�
 
 - 额度查询只使用公开 App Server 的 `initialize`、`initialized` 和 `account/rateLimits/read` 消息，由 Codex 处理已有认证。插件不读取认证文件、不查询私有网站接口、不使用重置券、不发起模型任务。
 - 任务名称查询使用公开 `thread/read`，明确设置 `includeTurns: false`，只请求已登记的确切任务编号。名称读取模块仅保留匹配的任务 ID 和 `thread.name`；不从预览或提示词推断名称，不返回或保存预览片段、消息正文、轮次正文等其他字段。
-- 用量解析仅打开官方 Hooks 提供的确切日志路径，核对任务标识，读取统计所需的数字与少量元数据。不扫描全部会话，不复制提示词、回答、推理正文或工具正文到统计存储。
+- 用量解析仅打开官方 Hooks 提供或公开祖先查询核实的确切日志路径，核对任务标识，读取统计所需的数字与少量元数据。不扫描全部会话，不复制提示词、回答、推理正文或工具正文到统计存储。
 - Hooks 是否执行由 Codex 的正常权限与信任流程决定。后台 Hooks 不向模型注入指令，不阻挡工作；格式发生变化时，统计会标记部分记录或不可用。
 - 面板仅监听 `127.0.0.1`，限制 Host、Origin 和跨站请求，修改设置需要本地请求令牌。没有远程分析、第三方上传或公共网络监听；官方额度读取仍由 Codex 发起正常查询。
 - 本地快照与官方额度按不同频率刷新。后台额度查询有频率限制，面板不活跃后暂停查询。默认不安装登录服务；上述 macOS 按需入口需要单独安装，且不会在登录时直接启动统计进程。
@@ -189,3 +189,9 @@ node tests/test_web_ui.cjs
 - [欧洲央行参考汇率](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)：默认换算的日期快照。
 
 项目使用 [MIT License](LICENSE)。第三方 PyYAML 的许可见 [vendor/PyYAML-LICENSE](vendor/PyYAML-LICENSE)。
+
+### 子任务漏记修复
+
+面板会在后台用公开 `thread/list` 的 `ancestorThreadId` 过滤器，分页补查已登记且身份已核实的主任务的后代。只接受公开返回的确切日志路径，并核对日志头中的任务、父任务及祖先链；不扫描其他对话、不读取凭据、不发起模型请求。此实验性接口不可用时保留原有统计并显示补查状态。已归档子任务也会分批查询，补读完成前总数仍可能增加。
+
+部分子任务日志包含继承的父任务历史。只有明确的 fork 身份和 `subagent_history_start_ordinal` 边界才能分离继承区；按记录的 ordinal 跳过继承历史，仅累计子任务自身用量。缺少可靠边界时保留不可用，不把父任务计数重复加入。Hooks 对父子任务独立登记，一项失败不再阻止另一项。

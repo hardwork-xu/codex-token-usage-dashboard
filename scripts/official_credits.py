@@ -245,7 +245,7 @@ def fetch_thread_usage(thread_id, command):
     try:
         with JsonRpcProcess([*command, "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.11.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.12.0"}}})
             initialized = False
             for response in rpc.responses():
                 if type(response.get("id")) is not int:

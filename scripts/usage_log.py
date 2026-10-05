@@ -254,6 +254,65 @@ class _Reader:
         self.warnings: list[str] = []
         self.pending_contexts: dict[str, dict[str, Any]] = {}
         self.pending_context_overflow = False
+        self.fork_history_start: int | None = None
+        self.fork_last_ordinal = 0
+        self.fork_owned_history = False
+        self.fork_expected_ancestor: str | None = None
+        self.fork_ancestors: set[str] = set()
+
+    def configure_fork_history(self, record: dict[str, Any], payload: dict[str, Any]) -> None:
+        """Honor only an explicit, identity-bound projected-history boundary.
+
+        Codex's SessionMeta defines subagent_history_start_ordinal as the first
+        ordinal owned by the child. Earlier records are inherited model context,
+        including ancestor session headers and token events. Use record.ordinal,
+        never raw line numbers, so blank or unreadable lines cannot move it.
+        """
+        boundary = payload.get("subagent_history_start_ordinal")
+        if boundary is None:
+            return
+        parent = _identifier(payload.get("parent_thread_id"))
+        forked_from = _identifier(payload.get("forked_from_id"))
+        source = source_metadata(payload)
+        if (type(boundary) is not int or not 0 <= boundary < 2**64
+                or payload.get("history_mode") != "paginated"
+                or type(record.get("ordinal")) is not int or record["ordinal"] != 0
+                or parent is None or forked_from != parent or parent == self.thread_id
+                or source.get("sourceType") != "subagent"
+                or source.get("parentThreadId") not in (None, parent)):
+            raise UsageLogError("子任务继承历史的身份或边界无效，无法安全统计。")
+        self.fork_history_start = boundary
+        self.fork_expected_ancestor = parent
+
+    def inherited_record(self, record: dict[str, Any]) -> bool:
+        """Validate fork ordinals and exclude the declared ancestor prefix."""
+        if self.fork_history_start is None:
+            return False
+        ordinal = record.get("ordinal")
+        if type(ordinal) is not int or not self.fork_last_ordinal < ordinal < 2**64:
+            raise UsageLogError("子任务记录缺少有效的递增序号，无法安全区分继承用量。")
+        self.fork_last_ordinal = ordinal
+        if ordinal >= self.fork_history_start:
+            self.fork_owned_history = True
+            return False
+        if record.get("type") == "session_meta":
+            payload = record.get("payload")
+            ancestor = _identifier(payload.get("id")) if isinstance(payload, dict) else None
+            if ancestor is None or (ancestor != self.fork_expected_ancestor and ancestor not in self.fork_ancestors):
+                raise UsageLogError("子任务继承历史包含未声明的任务身份。")
+            if ancestor == self.fork_expected_ancestor:
+                if len(self.fork_ancestors) >= 128:
+                    raise UsageLogError("子任务继承层级过多，无法安全统计。")
+                self.fork_ancestors.add(ancestor)
+                next_ancestor = _identifier(payload.get("forked_from_id"))
+                if next_ancestor == self.thread_id or next_ancestor in self.fork_ancestors:
+                    raise UsageLogError("子任务继承历史的祖先关系存在循环。")
+                self.fork_expected_ancestor = next_ancestor
+        # Older paginated forks copy context records without an ancestor header.
+        # The child's own verified metadata supplies the explicit boundary and
+        # parent identity. If copied headers exist, their ancestry is still
+        # checked above; their absence never turns inherited counters into usage.
+        return True
 
     def warn(self, warning: str) -> None:
         if warning not in self.warnings:
@@ -270,11 +329,15 @@ class _Reader:
         if not isinstance(record, dict):
             self.gap("已跳过无法识别的记录。")
             return
+        if self.verified and self.inherited_record(record):
+            return
         kind = record.get("type")
         payload = record.get("payload")
         if kind == "session_meta":
             if not isinstance(payload, dict) or payload.get("id") != self.thread_id:
                 raise UsageLogError("用量记录与指定任务不匹配。")
+            if not self.verified:
+                self.configure_fork_history(record, payload)
             self.verified = True
             self.source_metadata = source_metadata(payload)
             return
@@ -478,12 +541,15 @@ class _Reader:
     def result(self) -> dict[str, Any]:
         if not self.verified:
             raise UsageLogError("用量记录中缺少匹配的任务身份。")
+        warnings = list(self.warnings)
+        if self.fork_history_start is not None and not self.fork_owned_history:
+            warnings.append("已核实子任务身份，尚未读到自身记录；继承的父任务用量不计入。")
         return {
             "threadId": self.thread_id,
             "identityVerified": self.verified,
             "conversationMetadata": dict(self.source_metadata),
             "turns": [turn.export() for turn in self.turns.values()],
-            "warnings": list(self.warnings),
+            "warnings": warnings,
             "sourceNote": _SOURCE_NOTE,
         }
 

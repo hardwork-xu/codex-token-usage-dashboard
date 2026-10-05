@@ -653,8 +653,12 @@
     if (validNumber(c?.readableTasks)) parts.push('可读取 ' + fmt(c.readableTasks) + ' 个');
     if (validNumber(c?.unreadableTasks) && c.unreadableTasks > 0) parts.push(fmt(c.unreadableTasks) + ' 个任务的记录无法读取');
     if (validNumber(c?.backfillingTasks) && c.backfillingTasks > 0) parts.push(fmt(c.backfillingTasks) + ' 个正在补读');
+    if (validNumber(c?.recoveredTasks) && c.recoveredTasks > 0) parts.push('已自动补回 ' + fmt(c.recoveredTasks) + ' 个子任务');
+    const discovery = c?.descendantSync?.status;
+    if (discovery === 'running') parts.push('正在核对子任务登记');
+    if (discovery === 'partial' || discovery === 'unavailable') parts.push('子任务补查未完成，将自动重试');
     text('coverage-summary',parts.length ? parts.join(' · ') + (c.unreadableTasks > 0 || c.backfillingTasks > 0 ? '，汇总尚未补齐。' : '。仅代表已登记记录的覆盖情况。') : '记录覆盖范围尚未提供；金额仅表示已记录且可计价的用量。');
-    $('coverage-summary').classList.toggle('attention',!parts.length || c.unreadableTasks > 0 || c.backfillingTasks > 0);
+    $('coverage-summary').classList.toggle('attention',!parts.length || c.unreadableTasks > 0 || c.backfillingTasks > 0 || ['partial','unavailable'].includes(discovery));
     const day = state?.periods?.today?.startDate, override = validSpeedDate(day) ? state?.settings?.speedOverrides?.[day] : null, gaps = [];
     if (validNumber(c?.unreadableTasks) && c.unreadableTasks > 0) gaps.push(fmt(c.unreadableTasks) + ' 个登记任务的记录无法读取');
     if (validNumber(c?.backfillingTasks) && c.backfillingTasks > 0) gaps.push(fmt(c.backfillingTasks) + ' 个登记任务正在补读');

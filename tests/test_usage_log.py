@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -48,6 +49,17 @@ def stop(turn="turn-1"):
 
 def context(turn="turn-1", model="gpt-6-astra", **fields):
     return {"type": "turn_context", "payload": {"turn_id": turn, "model": model, **fields}}
+
+
+def fork_meta(boundary=7, parent="parent-fixture", **fields):
+    return {"type": "session_meta", "payload": {
+        "id": THREAD, "forked_from_id": parent, "parent_thread_id": parent,
+        "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent}}},
+        "history_mode": "paginated", "subagent_history_start_ordinal": boundary, **fields}}
+
+
+def numbered(records):
+    return [{**record, "ordinal": index} for index, record in enumerate(records)]
 
 
 class UsageLogTests(unittest.TestCase):
@@ -176,6 +188,144 @@ class UsageLogTests(unittest.TestCase):
         foreign = {"type": "session_meta", "payload": {"id": "other-thread"}}
         with self.assertRaises(usage_log.UsageLogError):
             self.read([META, start(), snapshot(counters()), foreign])
+
+    def fork_records(self):
+        return numbered([
+            fork_meta(), {"type": "session_meta", "payload": {"id": "parent-fixture"}},
+            start("parent-turn"), context("parent-turn", model="gpt-5.6-luna"),
+            snapshot(counters(8000, 2000)), stop("parent-turn"),
+            {"type": "compacted", "payload": {"message": "inherited private text"}},
+            start(), context(), snapshot(counters()), stop(),
+        ])
+
+    def test_explicit_fork_boundary_excludes_all_parent_usage_and_context(self):
+        result = self.read(self.fork_records())
+        self.assertEqual(len(result["turns"]), 1)
+        turn = result["turns"][0]
+        self.assertEqual((turn["id"], turn["model"], turn["tokens"]["total"]),
+                         ("turn-1", "gpt-6-astra", 100))
+        self.assertEqual(turn["quality"], "complete")
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["conversationMetadata"]["parentThreadId"], "parent-fixture")
+        self.assertNotIn("inherited private text", json.dumps(result))
+
+    def test_fork_boundary_uses_explicit_ordinals_not_blank_or_malformed_line_count(self):
+        records = self.fork_records()
+        lines = [json.dumps(record) for record in records]
+        lines.insert(4, "")
+        lines.insert(6, "{invalid inherited record")
+        self.path.write_text("\n\n".join(lines) + "\n", encoding="utf-8")
+        result = usage_log.read_usage_log(self.path, THREAD)
+        self.assertEqual([turn["tokens"]["total"] for turn in result["turns"]], [100])
+        self.assertTrue(any("格式异常" in note for note in result["warnings"]))
+
+    def test_fork_boundary_survives_incremental_reads_without_exposing_parent_turns(self):
+        records = self.fork_records()
+        self.path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        reader = usage_log.UsageLogReader(THREAD)
+        with mock.patch.object(usage_log, "MAX_RECORDS_PER_READ", 2):
+            first = reader.read(self.path)
+            self.assertEqual(first["turns"], [])
+            self.assertTrue(first["identityVerified"])
+            self.assertFalse(first["reading"]["complete"])
+            for _ in range(10):
+                result = reader.read(self.path)
+                self.assertNotIn("parent-turn", [turn["id"] for turn in result["turns"]])
+                if result["reading"]["complete"]:
+                    break
+        self.assertTrue(result["reading"]["complete"])
+        self.assertEqual(result["turns"][0]["tokens"]["total"], 100)
+
+    def test_inherited_only_file_waits_for_child_history_and_handles_partial_append(self):
+        records = self.fork_records()
+        self.path.write_text("".join(json.dumps(record) + "\n" for record in records[:7]), encoding="utf-8")
+        reader = usage_log.UsageLogReader(THREAD)
+        result = reader.read(self.path)
+        self.assertEqual(result["turns"], [])
+        self.assertTrue(any("尚未读到自身记录" in note for note in result["warnings"]))
+        with self.path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(records[7]))
+        result = reader.read(self.path)
+        self.assertFalse(result["reading"]["complete"])
+        self.assertEqual(result["turns"], [])
+        with self.path.open("a", encoding="utf-8") as stream:
+            stream.write("\n" + "".join(json.dumps(record) + "\n" for record in records[8:]))
+        result = reader.read(self.path)
+        self.assertTrue(result["reading"]["complete"])
+        self.assertEqual(result["turns"][0]["tokens"]["total"], 100)
+
+    def test_nested_fork_accepts_only_declared_ancestor_chain_before_boundary(self):
+        records = numbered([
+            fork_meta(boundary=6),
+            {"type": "session_meta", "payload": {"id": "parent-fixture", "forked_from_id": "grandparent"}},
+            {"type": "session_meta", "payload": {"id": "grandparent"}},
+            start("grandparent-turn"), snapshot(counters(8000, 2000)), stop("grandparent-turn"),
+            start(), context(), snapshot(counters()), stop(),
+        ])
+        result = self.read(records)
+        self.assertEqual([(turn["id"], turn["tokens"]["total"]) for turn in result["turns"]], [("turn-1", 100)])
+        records[2]["payload"]["id"] = "unrelated-thread"
+        with self.assertRaises(usage_log.UsageLogError):
+            self.read(records)
+
+    def test_foreign_header_after_fork_boundary_still_poisons_cached_results(self):
+        records = self.fork_records()
+        self.path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        reader = usage_log.UsageLogReader(THREAD)
+        self.assertEqual(reader.read(self.path)["turns"][0]["tokens"]["total"], 100)
+        with self.path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"ordinal": len(records), "type": "session_meta",
+                                     "payload": {"id": "parent-fixture"}}) + "\n")
+        for _ in range(2):
+            with self.assertRaises(usage_log.UsageLogError):
+                reader.read(self.path)
+
+    def test_invalid_fork_metadata_cannot_disable_session_identity_checks(self):
+        mutations = [{"subagent_history_start_ordinal": value} for value in (True, -1, 1.5, "7", 2**64)]
+        mutations += [{"history_mode": "legacy"}, {"parent_thread_id": None},
+                      {"forked_from_id": "different-parent"}, {"source": "cli"}]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(usage_log.UsageLogError):
+                records = self.fork_records()
+                records[0]["payload"].update(mutation)
+                self.read(records)
+
+    def test_missing_boolean_or_nonmonotonic_fork_ordinals_are_rejected(self):
+        for index, ordinal in ((0, None), (0, True), (2, None), (2, True), (2, 1), (8, 7), (9, -1)):
+            records = self.fork_records()
+            if ordinal is None:
+                records[index].pop("ordinal")
+            else:
+                records[index]["ordinal"] = ordinal
+            with self.subTest(index=index, ordinal=ordinal), self.assertRaises(usage_log.UsageLogError):
+                self.read(records)
+
+    def test_older_fork_without_copied_parent_header_still_excludes_parent_counters(self):
+        records = self.fork_records()
+        records[1] = {"ordinal": 1, "type": "response_item", "payload": {"content": "not metadata"}}
+        result = self.read(records)
+        self.assertEqual([(turn["id"], turn["tokens"]["total"]) for turn in result["turns"]], [("turn-1", 100)])
+        self.assertEqual(result["warnings"], [])
+
+    def test_optional_copied_parent_header_cannot_contain_an_unrelated_identity(self):
+        records = self.fork_records()
+        records[1]["payload"]["id"] = "undeclared-parent"
+        with self.assertRaises(usage_log.UsageLogError):
+            self.read(records)
+
+    def test_cyclic_fork_ancestry_is_rejected(self):
+        for ancestor in (THREAD, "parent-fixture"):
+            records = self.fork_records()
+            records[1]["payload"]["forked_from_id"] = ancestor
+            with self.subTest(ancestor=ancestor), self.assertRaises(usage_log.UsageLogError):
+                self.read(records)
+
+    def test_child_cumulative_counter_never_uses_inherited_parent_as_its_baseline(self):
+        records = self.fork_records()
+        records[9] = {**snapshot(counters(8080, 2020, 20, 10), counters()), "ordinal": 9}
+        result = self.read(records)
+        self.assertEqual(result["turns"][0]["tokens"]["total"], 100)
+        self.assertEqual(result["turns"][0]["quality"], "partial")
 
     def test_session_metadata_is_mandatory_and_must_precede_usage(self):
         for records in ([start()], [start(), META], []):

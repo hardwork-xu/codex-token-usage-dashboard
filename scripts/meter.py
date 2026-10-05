@@ -27,6 +27,7 @@ from official_credits import (account_scope, credits_from_response, credit_view,
                               record_balance, fetch_thread_usage, thread_usage_view)
 from periods import summarize_periods
 from conversations import fetch_conversation_titles, normalize_title, display_ids
+from descendants import discover_descendants
 from platform_support import default_data_dir, codex_command, file_lock, is_windows, subprocess_options
 from service_lifecycle import read_service_mode, activate_launchd_socket, adopt_http_socket, SOCKET_NAME
 
@@ -175,7 +176,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.11.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.12.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -376,6 +377,72 @@ class Meter:
         self.title_lock = threading.Lock()
         self.last_title_attempt = 0
         self.title_cursor = 0
+        self.descendant_lock = threading.Lock()
+        self.last_descendant_attempt = 0
+        self.descendant_roots = {}
+        self.descendant_progress = {}
+        self.descendant_status = {"status": "waiting", "updatedAt": None}
+
+    def refresh_descendants(self):
+        """Recover only descendants of roots already verified by the reader.
+
+        The public ancestor-filtered metadata query and each returned header
+        establish ancestry; the usage reader independently revalidates identity
+        before counting anything. No transcript discovery or model calls.
+        """
+        if not self.descendant_lock.acquire(blocking=False):
+            return
+        try:
+            if time.time() - self.last_descendant_attempt < 60:
+                return
+            self.last_descendant_attempt = time.time()
+            roots = dict(self.descendant_roots)
+            if not roots:
+                return
+            records = read_json(self.folder / "registry.json", {})
+            if not isinstance(records, dict):
+                return
+            # Unchecked recent roots first, then least recently checked. Two
+            # bounded queries per cycle avoid starving old registered families.
+            order = sorted((key for key in roots if key in records), key=lambda key: (
+                self.descendant_progress.get(key, {}).get("checkedAt", 0), -roots[key]))
+            self.descendant_status = {"status": "running", "updatedAt": None}
+            failures = rejected = deferred = 0
+            for root_id in order[:2]:
+                progress = self.descendant_progress.get(root_id, {})
+                archived = progress.get("archived", False)
+                result = discover_descendants(records, root_id, codex_command(),
+                    cursor=progress.get("cursor"), archived=archived, max_pages=2)
+                failures += bool(result.get("error"))
+                rejected += result.get("rejected", 0)
+                deferred += result.get("deferred", 0)
+                # Preserve concurrent Hook registrations and aliases. A public
+                # metadata result never overwrites an existing registered path.
+                with locked(self.folder):
+                    current = read_json(self.folder / "registry.json", {})
+                    if not isinstance(current, dict) or root_id not in current:
+                        continue
+                    for row in result.get("threads", []):
+                        thread_id = row["threadId"]
+                        if thread_id not in current:
+                            current[thread_id] = {"path": row["path"], "registeredAt": time.time(),
+                                "registrationSource": "verified_descendant"}
+                    if current != records:
+                        write_json(self.folder / "registry.json", current)
+                    records = current
+                # A later page can fail after earlier pages were verified.
+                # Resume at the returned failed-page cursor, not the old start.
+                progress = {"cursor": result.get("nextCursor", progress.get("cursor")), "archived": archived}
+                if result.get("complete") and not result.get("error"):
+                    progress = {"cursor": None, "archived": not archived}
+                self.descendant_progress[root_id] = {**progress, "checkedAt": time.time()}
+            self.descendant_status = {"status": "partial" if failures or rejected or deferred else "checked",
+                "updatedAt": time.time(), "failedQueries": failures,
+                "rejectedTasks": rejected, "deferredTasks": deferred}
+        except Exception:
+            self.descendant_status = {"status": "unavailable", "updatedAt": time.time()}
+        finally:
+            self.descendant_lock.release()
 
     def refresh_titles(self):
         if not self.title_lock.acquire(blocking=False):
@@ -558,6 +625,8 @@ class Meter:
                 errors.append("某个已登记任务的记录暂不可读或格式已变化")
         turns.sort(key=lambda turn: turn.get("startedAt") or 0, reverse=True)
         conversations = conversation_catalog(records, turns, self.titles, metadata)
+        self.descendant_roots = {row["id"]: row["lastActivityAt"] for row in conversations
+                                 if row["sourceType"] == "main"}
         for conversation in conversations:
             conversation["reading"] = readings.get(conversation["id"])
             conversation["readError"] = read_errors.get(conversation["id"])
@@ -588,6 +657,9 @@ class Meter:
         return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
                                "coverage": {"registeredTasks": len(records), "readableTasks": successful_reads,
                                             "unreadableTasks": len(read_errors),
+                                            "recoveredTasks": sum(record.get("registrationSource") == "verified_descendant"
+                                                for record in records.values() if isinstance(record, dict)),
+                                            "descendantSync": dict(self.descendant_status),
                                             "backfillingTasks": sum(bool(r and not r["complete"]) for r in readings.values())}},
                 "quota": quota_view(quota_snapshot, now=time.time(), last_attempt=self.last_attempt, refreshing=self.refresh_lock.locked(), validated=self.quota_verified),
                 "officialCredits": credit_view(quota_snapshot, self.credit_ledger, settings, now=time.time(), validated=self.quota_verified),
@@ -602,7 +674,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.11.0"
+    server_version = "CodexUsageMeter/0.12.0"
 
     def log_message(self, *_):
         pass
@@ -642,9 +714,11 @@ class Handler(BaseHTTPRequestHandler):
             snapshot = self.server.meter.snapshot()
             if any(row["titleSource"] == "fallback" for row in snapshot["conversations"]) and time.time() - self.server.meter.last_title_attempt >= 60:
                 threading.Thread(target=self.server.meter.refresh_titles, daemon=True).start()
+            if time.time() - self.server.meter.last_descendant_attempt >= 60:
+                threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.11.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.12.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -779,6 +853,7 @@ def serve(folder, port=0, *, launchd_socket=None, idle_timeout=0):
                     meter.refresh()
                     if time.time() - meter.last_title_attempt >= 300:
                         meter.refresh_titles()
+                    meter.refresh_descendants()
                 server.stop_event.wait(60)
         threading.Thread(target=refresh_loop, daemon=True).start()
         print(json.dumps(endpoint), flush=True)
@@ -887,12 +962,22 @@ def handle_hook(folder, data):
         return
     # Prompt bodies, tool arguments and agent messages are deliberately ignored.
     path, thread_id = data.get("transcript_path"), data.get("session_id")
-    if isinstance(path, str) and isinstance(thread_id, str):
-        register(folder, path, thread_id)
+    candidates = [(path, thread_id)]
     if data.get("hook_event_name") == "SubagentStop":
         child_path, child_id = data.get("agent_transcript_path"), data.get("agent_id")
-        if isinstance(child_path, str) and isinstance(child_id, str):
-            register(folder, child_path, child_id)
+        candidates.append((child_path, child_id))
+    for path, thread_id in candidates:
+        if not isinstance(path, str) or not isinstance(thread_id, str):
+            continue
+        try:
+            # Subagent hooks can reference an unavailable parent transcript.
+            # Validate each supplied identity independently so that one failure
+            # does not discard the other task. Never infer an ID from a path.
+            register(folder, path, thread_id)
+        except Exception:
+            # Hooks are advisory and must not expose paths or interrupt Codex.
+            # Each task still has to pass register's session identity checks.
+            continue
 
 
 def mcp(folder):
@@ -910,7 +995,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.11.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.12.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
