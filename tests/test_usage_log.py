@@ -256,7 +256,7 @@ class UsageLogTests(unittest.TestCase):
 
     def test_bound_speed_day_uses_utc_window_and_survives_local_timezone_change(self):
         from decimal import Decimal
-        from zoneinfo import ZoneInfo
+        from datetime import timezone, timedelta
         from pricing import estimate_turn
         begin = int(datetime.fromisoformat("2026-10-04T21:00:00+00:00").timestamp())
         end = begin + 86400
@@ -270,8 +270,12 @@ class UsageLogTests(unittest.TestCase):
         settings = {"pricingMode": "api", "currencyPerUsd": "1", "speedMode": "standard",
                     "speedOverrides": {"2026-10-05": "fast"}, "speedOverrideWindows": windows}
         prices, dates = [], []
-        for zone in ("Africa/Cairo", "Asia/Shanghai"):
-            with mock.patch.object(usage_log, "_local_day", lambda value: datetime.fromtimestamp(value, ZoneInfo(zone)).date().isoformat() if value is not None else None):
+        # These explicit offsets describe the fixture dates; the regression
+        # tests UTC-window independence, not an optional system tz database.
+        # Windows does not bundle IANA tzdata, and the runtime does not need it.
+        for offset in (3, 8):
+            zone = timezone(timedelta(hours=offset))
+            with mock.patch.object(usage_log, "_local_day", lambda value: datetime.fromtimestamp(value, zone).date().isoformat() if value is not None else None):
                 turn = usage_log.UsageLogReader(THREAD, override_windows=windows).read(self.path)["turns"][0]
             bound = sum(row["tokens"]["total"] for row in turn["usageSlices"] if row["speedOverrideDay"] == "2026-10-05")
             self.assertEqual(bound, 200)
