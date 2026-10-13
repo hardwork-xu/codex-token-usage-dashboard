@@ -77,7 +77,8 @@ FAST_MULTIPLIERS = {model: Decimal(2) for model in (
     "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
     "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4",
 )}
-ULTRAFAST_MULTIPLIERS = {"gpt-6-astra": Decimal(6)}
+# GPT-6.1 Sol Ultrafast was reverified on the official speed page 2026-10-13.
+ULTRAFAST_MULTIPLIERS = {"gpt-6-astra": Decimal(6), "gpt-6.1-sol": Decimal(6)}
 
 
 def speed_evidence(turn, settings):
@@ -91,15 +92,22 @@ def speed_evidence(turn, settings):
     tier = turn.get("serviceTier")
     if turn.get("pricingMetadataStatus") == "known" and isinstance(tier, str) and tier in supported:
         return tier, "recorded"
-    day = turn.get("day")
     overrides = settings.get("speedOverrides")
-    if isinstance(day, str) and isinstance(overrides, dict):
-        try:
-            valid_day = date.fromisoformat(day).isoformat() == day
-        except ValueError:
-            valid_day = False
-        if valid_day and isinstance(overrides.get(day), str) and overrides[day] in supported:
-            return overrides[day], "date_override"
+    windows = settings.get("speedOverrideWindows")
+    windows = windows if isinstance(windows, dict) else {}
+    if isinstance(overrides, dict):
+        # Bound declarations use the event timestamp projected into a fixed UTC
+        # interval by the reader. Changing the computer timezone cannot move it.
+        # Legacy declarations without windows still use their visible calendar day.
+        for day, bound in ((turn.get("speedOverrideDay"), True), (turn.get("day"), False)):
+            if not isinstance(day, str) or (day in windows) != bound:
+                continue
+            try:
+                valid_day = date.fromisoformat(day).isoformat() == day
+            except ValueError:
+                valid_day = False
+            if valid_day and isinstance(overrides.get(day), str) and overrides[day] in supported:
+                return overrides[day], "date_override"
     fallback = settings.get("speedMode", "auto")
     return fallback if isinstance(fallback, str) else "invalid", "fallback"
 
@@ -403,9 +411,12 @@ def validated_slices(turn):
         day = item.get("day")
         if day is not None and (not isinstance(day, str) or date.fromisoformat(day).isoformat() != day):
             raise ValueError("模型用量日期无效。")
+        override_day = item.get("speedOverrideDay")
+        if override_day is not None and (not isinstance(override_day, str) or date.fromisoformat(override_day).isoformat() != override_day):
+            raise ValueError("速度声明日期无效。")
         model, tier = safe_model(item.get("model")), safe_model(item.get("serviceTier"))
         status = "known" if item.get("pricingMetadataStatus") == "known" and model and tier else "unknown"
-        slices.append({"day": day, "model": model, "serviceTier": tier,
+        slices.append({"day": day, "speedOverrideDay": override_day, "model": model, "serviceTier": tier,
                        "pricingMetadataStatus": status, "tokens": tokens,
                        "apiContext": _api_context(item.get("apiContext"))})
         bucket = daily.setdefault(day, dict.fromkeys(TOKEN_FIELDS, 0))
@@ -495,6 +506,7 @@ def _estimate_turn(turn: dict, settings: dict) -> dict:
     if slices is None:
         source = {**turn, "model": safe_model(turn.get("model"))}
         source.pop("day", None)  # Only validated event slices establish a pricing day.
+        source.pop("speedOverrideDay", None)
         if invalid:
             source.update(model=None, serviceTier=None, pricingMetadataStatus="unknown", quality="partial")
         price = _estimate_single(source, settings)
@@ -613,7 +625,8 @@ def estimate_turn(turn: dict, settings: dict) -> dict:
     speed_mode = settings.get("speedMode", "auto")
     credit_price = _estimate_turn(turn, {"pricingMode": "official", "speedMode": speed_mode,
                                         "usdPerCredit": "1", "currencyPerUsd": "1",
-                                        "speedOverrides": settings.get("speedOverrides", {})})
+                                        "speedOverrides": settings.get("speedOverrides", {}),
+                                        "speedOverrideWindows": settings.get("speedOverrideWindows", {})})
     credit_rows = {}
     for row in credit_price["models"]:
         rates = row["standardRates"]

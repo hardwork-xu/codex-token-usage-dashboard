@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 from copy import deepcopy
 from datetime import date
@@ -11,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import socketserver
@@ -38,7 +40,7 @@ FX_REFERENCE = {"sourceUrl": "https://www.ecb.europa.eu/stats/policy_and_exchang
                 "date": "2026-09-14", "label": "欧洲央行参考汇率"}
 DEFAULT_SETTINGS = {"currencyName": "美元", "currencySymbol": "$", "ratePerMillion": None,
                     "pricingMode": "api", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "auto",
-                    "speedOverrides": {},
+                    "speedOverrides": {}, "speedOverrideWindows": {},
                     "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None}
 QUOTA_STALE_SECONDS = 120
 QUOTA_REFRESH_COOLDOWN = 30
@@ -176,7 +178,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.12.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.13.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -308,6 +310,25 @@ def validate_settings(value):
         if not valid_day or speed not in ("standard", "fast", "ultrafast"):
             raise ValueError("按日速度设置需要有效的 YYYY-MM-DD 日期和 Standard、Fast 或 Ultrafast")
         out["speedOverrides"][day] = speed
+    windows = value.get("speedOverrideWindows", {})
+    if not isinstance(windows, dict) or set(windows) - set(out["speedOverrides"]):
+        raise ValueError("速度时间范围必须对应已确认的日期")
+    out["speedOverrideWindows"] = {}
+    for day, window in windows.items():
+        if not isinstance(window, dict) or set(window) != {"startAt", "endAt", "timeZone"}:
+            raise ValueError("速度日期的时区记录无效")
+        start, end, zone = window["startAt"], window["endAt"], window["timeZone"]
+        nominal = (date.fromisoformat(day) - date(1970, 1, 1)).days * 86400
+        if (type(start) is not int or type(end) is not int or not 0 <= start < end <= 253402300799
+                or not 20 * 3600 <= end - start <= 28 * 3600
+                or abs(start - nominal) > 14 * 3600 or abs(end - nominal - 86400) > 14 * 3600
+                or not isinstance(zone, str) or not 1 <= len(zone) <= 128
+                or any(ord(char) < 32 for char in zone)):
+            raise ValueError("速度日期需要有效的本地午夜范围和时区")
+        out["speedOverrideWindows"][day] = dict(window)
+    ordered_windows = sorted(out["speedOverrideWindows"].values(), key=lambda window: window["startAt"])
+    if any(left["endAt"] > right["startAt"] for left, right in zip(ordered_windows, ordered_windows[1:])):
+        raise ValueError("速度确认时间范围重叠，请核对跨时区的相邻日期")
     for key, limit in (("currencyName", 24), ("currencySymbol", 8)):
         text = value.get(key, DEFAULT_SETTINGS[key])
         if not isinstance(text, str) or not text.strip() or len(text) > limit or any(ord(c) < 32 for c in text):
@@ -357,7 +378,10 @@ class Meter:
         self.folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.cache = {}
         self.reader_incomplete = {}
+        self.reader_override_windows = None
         self.snapshot_lock = threading.Lock()
+        self.history_turns = []
+        self.history_conversation_ids = set()
         self.quota = read_json(folder / "quota.json", {"updatedAt": None, "error": "尚未查询额度", "buckets": []})
         if not isinstance(self.quota, dict):
             self.quota = {"updatedAt": None, "error": "额度缓存无效", "buckets": []}
@@ -381,7 +405,44 @@ class Meter:
         self.last_descendant_attempt = 0
         self.descendant_roots = {}
         self.descendant_progress = {}
+        self.descendant_known_roots = {}
+        self._load_descendant_progress()
         self.descendant_status = {"status": "waiting", "updatedAt": None}
+
+    def _load_descendant_progress(self):
+        """Load only scheduling metadata, never treat cached roots as proof."""
+        state = read_json(self.folder / "descendant-sync.json", {})
+        records = read_json(self.folder / "registry.json", {})
+        if not isinstance(state, dict) or state.get("version") != 1 or not isinstance(records, dict):
+            return
+        roots, progress = state.get("roots"), state.get("progress")
+        if not isinstance(roots, dict) or not isinstance(progress, dict):
+            return
+        now = time.time()
+        for ident, activity in roots.items():
+            if (not isinstance(ident, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", ident) is None
+                    or not isinstance(records.get(ident), dict)
+                    or type(activity) not in (int, float) or not math.isfinite(activity) or activity < 0):
+                continue
+            self.descendant_known_roots[ident] = min(activity, now)
+            entry = progress.get(ident)
+            if not isinstance(entry, dict):
+                continue
+            cursor, archived, checked = entry.get("cursor"), entry.get("archived"), entry.get("checkedAt")
+            if (cursor is not None and (not isinstance(cursor, str) or not cursor or len(cursor) > 4096)
+                    or type(archived) is not bool or type(checked) not in (int, float)
+                    or not math.isfinite(checked) or not 0 <= checked <= now):
+                continue
+            self.descendant_progress[ident] = {"cursor": cursor, "archived": archived, "checkedAt": checked}
+
+    def _save_descendant_progress(self):
+        """Saving a checkpoint must not undo a discovered/registered child."""
+        try:
+            write_json(self.folder / "descendant-sync.json", {"version": 1,
+                "roots": self.descendant_known_roots, "progress": self.descendant_progress})
+            return True
+        except (OSError, ValueError):
+            return False
 
     def refresh_descendants(self):
         """Recover only descendants of roots already verified by the reader.
@@ -396,11 +457,19 @@ class Meter:
             if time.time() - self.last_descendant_attempt < 60:
                 return
             self.last_descendant_attempt = time.time()
-            roots = dict(self.descendant_roots)
-            if not roots:
-                return
             records = read_json(self.folder / "registry.json", {})
             if not isinstance(records, dict):
+                return
+            # Keep previously verified roots eligible across missing logs and
+            # worker restarts, but reverify identity in every discovery call.
+            roots = {**self.descendant_known_roots, **self.descendant_roots}
+            self.descendant_known_roots = {key: value for key, value in roots.items()
+                                          if isinstance(records.get(key), dict)}
+            self.descendant_progress = {key: value for key, value in self.descendant_progress.items()
+                                        if key in self.descendant_known_roots}
+            persisted = self._save_descendant_progress()
+            roots = dict(self.descendant_known_roots)
+            if not roots:
                 return
             # Unchecked recent roots first, then least recently checked. Two
             # bounded queries per cycle avoid starving old registered families.
@@ -411,23 +480,38 @@ class Meter:
             for root_id in order[:2]:
                 progress = self.descendant_progress.get(root_id, {})
                 archived = progress.get("archived", False)
-                result = discover_descendants(records, root_id, codex_command(),
-                    cursor=progress.get("cursor"), archived=archived, max_pages=2)
+                try:
+                    result = discover_descendants(records, root_id, codex_command(),
+                        cursor=progress.get("cursor"), archived=archived, max_pages=2)
+                except Exception:
+                    # One unavailable family must not starve the remaining
+                    # registered roots, including after a worker restart.
+                    result = {"error": True, "nextCursor": progress.get("cursor")}
                 failures += bool(result.get("error"))
                 rejected += result.get("rejected", 0)
                 deferred += result.get("deferred", 0)
                 # Preserve concurrent Hook registrations and aliases. A public
-                # metadata result never overwrites an existing registered path.
+                # metadata result may repair the queried root's stale path only
+                # after exact-ID and replacement-header validation, and never
+                # overwrite a concurrent Hook registration.
                 with locked(self.folder):
                     current = read_json(self.folder / "registry.json", {})
                     if not isinstance(current, dict) or root_id not in current:
                         continue
+                    changed = False
+                    old_root, current_root = records.get(root_id), current.get(root_id)
+                    if (result.get("rootPath") and isinstance(old_root, dict) and isinstance(current_root, dict)
+                            and current_root.get("path") == old_root.get("path")
+                            and current_root.get("path") != result["rootPath"]):
+                        current_root["path"] = result["rootPath"]
+                        changed = True
                     for row in result.get("threads", []):
                         thread_id = row["threadId"]
                         if thread_id not in current:
                             current[thread_id] = {"path": row["path"], "registeredAt": time.time(),
                                 "registrationSource": "verified_descendant"}
-                    if current != records:
+                            changed = True
+                    if changed:
                         write_json(self.folder / "registry.json", current)
                     records = current
                 # A later page can fail after earlier pages were verified.
@@ -436,9 +520,10 @@ class Meter:
                 if result.get("complete") and not result.get("error"):
                     progress = {"cursor": None, "archived": not archived}
                 self.descendant_progress[root_id] = {**progress, "checkedAt": time.time()}
-            self.descendant_status = {"status": "partial" if failures or rejected or deferred else "checked",
+                persisted = self._save_descendant_progress() and persisted
+            self.descendant_status = {"status": "partial" if failures or rejected or deferred or not persisted else "checked",
                 "updatedAt": time.time(), "failedQueries": failures,
-                "rejectedTasks": rejected, "deferredTasks": deferred}
+                "rejectedTasks": rejected, "deferredTasks": deferred, "progressPersisted": persisted}
         except Exception:
             self.descendant_status = {"status": "unavailable", "updatedAt": time.time()}
         finally:
@@ -582,6 +667,49 @@ class Meter:
         with self.snapshot_lock:
             return self._snapshot()
 
+    def history(self, thread_id=None, limit=100, cursor=None):
+        """Page the full ledger, filtering BEFORE pagination.
+
+        A stable key cursor prevents new questions inserted at the front from
+        duplicating or skipping older questions between page requests. Prices
+        are recomputed with current settings, just as in the overview.
+        """
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("每页记录数应在 1 到 200 之间")
+        if thread_id is not None and (not isinstance(thread_id, str) or not 1 <= len(thread_id) <= 128):
+            raise ValueError("任务标识无效")
+        before = None
+        if cursor is not None:
+            try:
+                if not isinstance(cursor, str) or not 1 <= len(cursor) <= 1024:
+                    raise ValueError()
+                payload = json.loads(base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True))
+                key = payload["key"]
+                if (payload.get("version") != 1 or payload.get("threadId") != thread_id
+                        or not isinstance(key, list) or len(key) != 3
+                        or type(key[0]) not in (float, int) or not math.isfinite(key[0])
+                        or any(not isinstance(part, str) or len(part) > 256 for part in key[1:])):
+                    raise ValueError()
+                before = tuple(key)
+            except (ValueError, TypeError, KeyError, UnicodeError):
+                raise ValueError("历史分页位置无效，请重新加载") from None
+        with self.snapshot_lock:
+            self._snapshot()
+            if thread_id is not None and thread_id not in self.history_conversation_ids:
+                raise ValueError("任务尚未登记")
+            items = [turn for turn in self.history_turns if thread_id is None or turn["threadId"] == thread_id]
+            total = len(items)
+            key_of = lambda turn: (turn.get("startedAt") or 0, turn["threadId"], turn["id"])
+            items.sort(key=key_of, reverse=True)
+            if before is not None:
+                items = [turn for turn in items if key_of(turn) < before]
+            page = items[:limit]
+            next_cursor = None
+            if len(items) > limit:
+                payload = {"version": 1, "threadId": thread_id, "key": key_of(page[-1])}
+                next_cursor = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode("ascii")
+            return {"turns": page, "total": total, "nextCursor": next_cursor}
+
     def _snapshot(self):
         self.last_client = time.time()
         registry_path = self.folder / "registry.json"
@@ -594,6 +722,13 @@ class Meter:
         elif records is None:
             records = {}
         settings = self.settings()
+        windows = settings["speedOverrideWindows"]
+        if windows != self.reader_override_windows:
+            # Day declarations have fixed UTC boundaries. Rebuild their slice
+            # attribution when edited; never reuse labels from an old window.
+            self.cache.clear()
+            self.reader_incomplete.clear()
+            self.reader_override_windows = deepcopy(windows)
         readings, read_errors, successful_reads, metadata = {}, {}, 0, {}
         self.cache = {key: reader for key, reader in self.cache.items() if key in records}
         self.reader_incomplete = {key: value for key, value in self.reader_incomplete.items() if key in records}
@@ -606,7 +741,7 @@ class Meter:
                 path = Path(record["path"])
                 reader = self.cache.get(thread_id)
                 if reader is None:
-                    reader = self.cache[thread_id] = UsageLogReader(thread_id)
+                    reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=windows)
                 result = reader.read(path, time_budget=weights[thread_id] / total_weight)
                 reading = result.get("reading")
                 self.reader_incomplete[thread_id] = not (isinstance(reading, dict) and reading.get("complete") is True)
@@ -640,6 +775,8 @@ class Meter:
         periods = summarize_periods(turns, settings,
                                    reading_incomplete=any(r and not r["complete"] for r in readings.values()),
                                    read_error_count=len(read_errors) + int(registry_failed))
+        self.history_turns = turns
+        self.history_conversation_ids = set(records)
         # Retain one recent record for older tasks so the global history cap
         # cannot make an explicitly selected registered task appear empty.
         visible_turns = turns[:200]
@@ -669,12 +806,13 @@ class Meter:
                     for thread_id, record in official_records
                     if thread_id in records and quota_snapshot.get("accountScope") is not None
                     and record.get("accountScope") == quota_snapshot.get("accountScope")},
-                "turns": visible_turns, "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
+                "turns": visible_turns, "history": {"total": len(turns), "returned": len(visible_turns)},
+                "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
                 "fxReference": {**FX_REFERENCE, "customized": any(decimal.Decimal(settings["exchangeRates"][key]) != decimal.Decimal(EXCHANGE_RATES[key]) for key in EXCHANGE_RATES)}}
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.12.0"
+    server_version = "CodexUsageMeter/0.13.0"
 
     def log_message(self, *_):
         pass
@@ -708,6 +846,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed():
             return self.respond({"error": "拒绝跨来源访问"}, 403)
+        if self.path.split("?", 1)[0] == "/api/history":
+            try:
+                if len(self.path) > 2048:
+                    raise ValueError("请求过长")
+                query = parse.parse_qs(parse.urlsplit(self.path).query, keep_blank_values=True, max_num_fields=3)
+                if set(query) - {"threadId", "limit", "cursor"} or any(len(values) != 1 for values in query.values()):
+                    raise ValueError("历史查询字段无效")
+                limit = query.get("limit", ["100"])[0]
+                if not limit.isascii() or not limit.isdigit():
+                    raise ValueError("每页记录数无效")
+                return self.respond(self.server.meter.history(query.get("threadId", [None])[0],
+                    int(limit), query.get("cursor", [None])[0]))
+            except ValueError as exc:
+                return self.respond({"error": str(exc)}, 400)
         if self.path == "/":
             return self.respond((ROOT / "web/index.html").read_bytes(), kind="text/html; charset=utf-8")
         if self.path == "/api/state":
@@ -718,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.12.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.13.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -737,7 +889,7 @@ class Handler(BaseHTTPRequestHandler):
             size = int(self.headers.get("Content-Length", "0"))
             # A complete, bounded year of date-specific speed confirmations
             # exceeds the original 4 KiB settings payload limit.
-            limit = 16384 if self.path == "/api/settings" else 4096
+            limit = 131072 if self.path == "/api/settings" else 4096
             if size < 1 or size > limit or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("请求格式无效")
             value = json.loads(self.rfile.read(size))
@@ -752,7 +904,13 @@ class Handler(BaseHTTPRequestHandler):
                     # Older clients omit new fields. Saving a currency or one
                     # speed setting must preserve other confirmed history;
                     # an explicit speedOverrides={} clears the dates.
-                    value = {**self.server.meter.settings(), **value}
+                    previous = self.server.meter.settings()
+                    # Old clients can remove a date without knowing its newly
+                    # added UTC window; discard only that removed date's window.
+                    if "speedOverrides" in value and "speedOverrideWindows" not in value and isinstance(value["speedOverrides"], dict):
+                        previous["speedOverrideWindows"] = {day: window for day, window in previous["speedOverrideWindows"].items()
+                                                            if day in value["speedOverrides"]}
+                    value = {**previous, **value}
                 settings = validate_settings(value)
                 write_json(self.server.meter.folder / "settings.json", settings)
             self.respond({"ok": True, "settings": settings})
@@ -995,7 +1153,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.12.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.13.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

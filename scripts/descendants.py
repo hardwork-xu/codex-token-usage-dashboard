@@ -1,6 +1,7 @@
 """Bounded descendant metadata discovery for an explicitly registered root.
 
-Only public thread/list with ancestorThreadId is used. Returned paths are not
+Public thread/list with ancestorThreadId is used, with exact-ID metadata-only
+thread/read when a registered root header is unavailable. Returned paths are not
 registered here: callers must still use the normal usage reader. No prompt,
 preview, account identifier, or full server response leaves this module.
 """
@@ -87,7 +88,7 @@ def discover_descendants(records, root_id, codex_binary, *, cursor=None, archive
     fully verified parent chain back to this exact registered root.
     """
     result = {"threads": [], "nextCursor": cursor, "complete": False, "pages": 0, "checked": 0,
-              "rejected": 0, "deferred": 0, "error": None}
+              "rejected": 0, "deferred": 0, "error": None, "rootPath": None}
     if (not isinstance(records, dict) or _identifier(root_id) is None
             or not isinstance(records.get(root_id), dict)):
         raise ValueError("仅可同步已登记主任务的子任务。")
@@ -100,7 +101,7 @@ def discover_descendants(records, root_id, codex_binary, *, cursor=None, archive
             (not isinstance(cursor, str) or not cursor or len(cursor) > 4096)):
         raise ValueError("子任务同步分页参数无效。")
     root = _header(records[root_id].get("path"), root_id)
-    if root is None or root["sourceType"] != "main":
+    if root is not None and root["sourceType"] != "main":
         result["error"] = "主任务身份暂时无法核实，未同步子任务。"
         return result
     prefix = command_prefix(codex_binary)
@@ -109,7 +110,7 @@ def discover_descendants(records, root_id, codex_binary, *, cursor=None, archive
     try:
         with JsonRpcProcess([*prefix, "app-server", "--stdio"], timeout=timeout) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter_descendants", "version": "0.12.0"},
+                "clientInfo": {"name": "codex_usage_meter_descendants", "version": "0.13.0"},
                 "capabilities": {"experimentalApi": True}}})
             responses = rpc.responses()
 
@@ -123,8 +124,27 @@ def discover_descendants(records, root_id, codex_binary, *, cursor=None, archive
 
             receive(1)
             rpc.send({"method": "initialized"})
+            first_page_id = 2
+            if root is None:
+                # A moved/deleted root log must not silently remove its whole
+                # family from recovery. Reverify this exact registered ID using
+                # public metadata; never fall back to an unfiltered listing.
+                rpc.send({"id": 2, "method": "thread/read", "params": {
+                    "threadId": root_id, "includeTurns": False}})
+                metadata = receive(2).get("thread")
+                if (not isinstance(metadata, dict) or metadata.get("id") != root_id
+                        or metadata.get("parentThreadId") is not None
+                        or source_metadata(metadata)["sourceType"] != "main"):
+                    raise ValueError("root identity unavailable")
+                root = {"threadId": root_id, "path": None,
+                        "parentThreadId": None, "sourceType": "main"}
+                replacement = _header(metadata.get("path"), root_id)
+                if replacement is not None and replacement["sourceType"] == "main":
+                    root = replacement
+                    result["rootPath"] = replacement["path"]
+                first_page_id = 3
             for page in range(max_pages):
-                request_id = page + 2
+                request_id = page + first_page_id
                 rpc.send({"id": request_id, "method": "thread/list", "params": {
                     "ancestorThreadId": root_id, "sourceKinds": list(_SOURCE_KINDS),
                     "useStateDbOnly": True, "archived": archived, "cursor": result["nextCursor"],

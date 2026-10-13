@@ -9,6 +9,8 @@ quota or automatically aggregated child-agent usage.
 from __future__ import annotations
 
 from copy import deepcopy
+from bisect import bisect_right
+import codecs
 import hashlib
 import json
 import math
@@ -18,7 +20,7 @@ import re
 import stat
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from conversations import source_metadata
@@ -78,6 +80,30 @@ def _local_day(timestamp: float | int | None) -> str | None:
         return None
 
 
+def _override_windows(value):
+    """Copy bounded UTC declaration intervals; their labels are not log content."""
+    if value is None:
+        return ()
+    if not isinstance(value, dict) or len(value) > 366:
+        raise ValueError("速度日期窗口无效。")
+    windows = []
+    for day, window in value.items():
+        if not isinstance(day, str) or not isinstance(window, dict):
+            raise ValueError("速度日期窗口无效。")
+        try:
+            canonical = date.fromisoformat(day).isoformat() == day
+        except ValueError:
+            canonical = False
+        start, end = window.get("startAt"), window.get("endAt")
+        if not canonical or type(start) is not int or type(end) is not int or not 0 <= start < end <= 253402300799:
+            raise ValueError("速度日期窗口无效。")
+        windows.append((start, end, day))
+    windows.sort()
+    if any(left[1] > right[0] for left, right in zip(windows, windows[1:])):
+        raise ValueError("速度日期窗口不能重叠。")
+    return tuple(windows)
+
+
 def _coherent(value: Any) -> dict[str, int] | None:
     if not isinstance(value, dict):
         return None
@@ -115,6 +141,152 @@ def _bounded_last(last: dict[str, int] | None, total: dict[str, int]) -> dict[st
     return last
 
 
+class _LargeRecordEnvelope:
+    """Validate a large JSON record while retaining only its type and ordinal.
+
+    No payload string or unfinished JSON is retained. A strict streaming grammar
+    prevents a misleading prefix, duplicate type key, or malformed body from
+    being accepted as an ignorable message. Unknown records remain real gaps.
+    """
+    def __init__(self):
+        self.decoder = codecs.getincrementaldecoder("utf-8")()
+        self.stack = []
+        self.started = False
+        self.done = False
+        self.failed = False
+        self.mode = None
+        self.escaped = False
+        self.unicode_left = 0
+        self.capture = None
+        self.atom = ""
+        self.key = None
+        self.seen = set()
+        self.envelope = {}
+
+    def _value(self, value):
+        if not self.stack:
+            raise ValueError
+        frame = self.stack[-1]
+        if frame[0] == "object":
+            if frame[1] != "value":
+                raise ValueError
+            if len(self.stack) == 1 and self.key in {"type", "ordinal"}:
+                self.envelope[self.key] = value
+        elif frame[1] not in {"value", "value_or_end"}:
+            raise ValueError
+        frame[1] = "comma_or_end"
+
+    def feed(self, raw, *, final=False):
+        if self.failed:
+            return
+        try:
+            self._feed(self.decoder.decode(raw, final=final))
+            if final and (not self.done or self.mode is not None):
+                raise ValueError
+        except (ValueError, UnicodeError, RecursionError):
+            self.failed = True
+            self.stack.clear()
+            self.capture = None
+            self.envelope.clear()
+
+    def _feed(self, text):
+        for char in text:
+            if self.mode == "string":
+                if self.capture is not None:
+                    self.capture += char
+                    if len(self.capture) > 1024:
+                        raise ValueError
+                if self.unicode_left:
+                    if char not in "0123456789abcdefABCDEF":
+                        raise ValueError
+                    self.unicode_left -= 1
+                elif self.escaped:
+                    if char not in '\"\\/bfnrtu':
+                        raise ValueError
+                    self.unicode_left = 4 if char == "u" else 0
+                    self.escaped = False
+                elif char == "\\":
+                    self.escaped = True
+                elif char == '\"':
+                    value = json.loads(self.capture) if self.capture is not None else None
+                    self.capture = None
+                    self.mode = None
+                    frame = self.stack[-1]
+                    if frame[0] == "object" and frame[1] in {"key", "key_or_end"}:
+                        if len(self.stack) == 1:
+                            self.key = value
+                            if value in {"type", "ordinal"}:
+                                if value in self.seen:
+                                    raise ValueError
+                                self.seen.add(value)
+                        frame[1] = "colon"
+                    else:
+                        self._value(value)
+                elif ord(char) < 32:
+                    raise ValueError
+                continue
+            if self.mode == "atom":
+                if char not in " \t\r\n,]}":
+                    self.atom += char
+                    if len(self.atom) > 128:
+                        raise ValueError
+                    continue
+                if not re.fullmatch(r"(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)", self.atom):
+                    raise ValueError
+                self._value(json.loads(self.atom))
+                self.atom = ""
+                self.mode = None
+            if char in " \t\r\n":
+                continue
+            if self.done:
+                raise ValueError
+            if not self.started:
+                if char != "{":
+                    raise ValueError
+                self.started = True
+                self.stack.append(["object", "key_or_end"])
+                continue
+            frame = self.stack[-1]
+            if char in "}]":
+                valid = (frame[0] == "object" and char == "}" and frame[1] in {"key_or_end", "comma_or_end"}
+                         or frame[0] == "array" and char == "]" and frame[1] in {"value_or_end", "comma_or_end"})
+                if not valid:
+                    raise ValueError
+                self.stack.pop()
+                self.done = not self.stack
+            elif char == ":" and frame == ["object", "colon"]:
+                frame[1] = "value"
+            elif char == "," and frame[1] == "comma_or_end":
+                frame[1] = "key" if frame[0] == "object" else "value"
+            elif char == '\"':
+                is_key = frame[0] == "object" and frame[1] in {"key", "key_or_end"}
+                if not is_key and frame[1] not in {"value", "value_or_end"}:
+                    raise ValueError
+                self.capture = '\"' if len(self.stack) == 1 and (is_key or self.key == "type") else None
+                self.mode = "string"
+            elif frame[1] in {"value", "value_or_end"}:
+                if char in "[{":
+                    self._value(None)
+                    if len(self.stack) >= 128:
+                        raise ValueError
+                    self.stack.append(["object", "key_or_end"] if char == "{" else ["array", "value_or_end"])
+                elif char in "-0123456789tfn":
+                    self.mode = "atom"
+                    self.atom = char
+                else:
+                    raise ValueError
+            else:
+                raise ValueError
+
+    def result(self):
+        if self.failed or not self.done or self.envelope.get("type") not in {"response_item", "compacted", "session_meta"}:
+            return None
+        if "ordinal" in self.envelope and (type(self.envelope["ordinal"]) is not int
+                                          or not 0 <= self.envelope["ordinal"] < 2**64):
+            return None
+        return dict(self.envelope)
+
+
 class _PricingMetadata:
     """Keep bounded metadata evidence independently of token-count quality."""
 
@@ -149,13 +321,15 @@ class _PricingMetadata:
 
 
 class _Turn:
-    def __init__(self, turn_id: str, thread_id: str, started_at: float | int | None, *, started: bool = True):
+    def __init__(self, turn_id: str, thread_id: str, started_at: float | int | None, *, started: bool = True, override_windows=()):
         self.id = turn_id
         self.thread_id = thread_id
         self.started_at = started_at
         self.ended_at: float | int | None = None
         self.status = "running" if started else "completed"
         self.started = started
+        self.override_windows = override_windows
+        self.override_starts = tuple(row[0] for row in override_windows)
         self.tokens: dict[str, int] | None = None
         self.daily_usage: dict[str, dict[str, int]] = {}
         self.undated_tokens = _empty_tokens()
@@ -205,7 +379,12 @@ class _Turn:
                 context = "unknown"
             # Cache-write mapping is not verified. Preserve the boundary so an
             # unsupported call cannot erase the priced subtotal of other calls.
-            key = (day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"], context,
+            override_day = None
+            if timestamp is not None and self.override_windows:
+                index = bisect_right(self.override_starts, timestamp) - 1
+                if index >= 0 and timestamp < self.override_windows[index][1]:
+                    override_day = self.override_windows[index][2]
+            key = (day, override_day, metadata["model"], metadata["serviceTier"], metadata["pricingMetadataStatus"], context,
                    bool(amount["cacheWriteInput"]))
             sliced = self.usage_slices.setdefault(key, _empty_tokens())
             for field, value in amount.items():
@@ -235,22 +414,25 @@ class _Turn:
             "tokens": dict(self.tokens) if self.tokens is not None else None,
             "dailyUsage": {day: dict(tokens) for day, tokens in self.daily_usage.items()},
             "undatedTokens": dict(self.undated_tokens),
-            "usageSlices": [{"day": day, "model": model, "serviceTier": tier,
+            "usageSlices": [{"day": day, "speedOverrideDay": override_day, "model": model, "serviceTier": tier,
                              "pricingMetadataStatus": status, "apiContext": context, "tokens": dict(tokens)}
-                            for (day, model, tier, status, context, _cache_write), tokens in self.usage_slices.items()],
+                            for (day, override_day, model, tier, status, context, _cache_write), tokens in self.usage_slices.items()],
             **self.pricing.export(),
         }
 
 
 class _Reader:
-    def __init__(self, expected_thread_id: str):
+    def __init__(self, expected_thread_id: str, *, override_windows=None):
         self.thread_id = expected_thread_id
+        self.override_windows = _override_windows(override_windows)
         self.verified = False
         self.source_metadata = {}
         self.turns: dict[str, _Turn] = {}
         self.active: _Turn | None = None
         self.previous_total: dict[str, int] | None = None
         self.baseline_valid = False
+        self.pending_compaction = None
+        self.compaction_context_seen = False
         self.warnings: list[str] = []
         self.pending_contexts: dict[str, dict[str, Any]] = {}
         self.pending_context_overflow = False
@@ -319,11 +501,30 @@ class _Reader:
             self.warnings.append(warning)
 
     def gap(self, reason: str) -> None:
+        self.pending_compaction = None
+        self.compaction_context_seen = False
         self.baseline_valid = False
         self.warn(reason)
         if self.active is not None:
             self.active.mark(reason)
             self.active.set_context({"model": None, "serviceTier": None, "pricingMetadataStatus": "unknown"})
+
+    def compact(self) -> None:
+        # Compression can emit the same lifetime snapshot without resetting it.
+        # Delay the gap verdict until a same-turn counter proves continuity.
+        if self.active is not None and self.baseline_valid and self.previous_total is not None:
+            if self.pending_compaction is None:
+                self.pending_compaction = (self.active.id, dict(self.previous_total))
+                self.compaction_context_seen = False
+        else:
+            self.gap("上下文压缩后的统计连续性未获确认，用量可能不完整。")
+
+    def flush_compaction(self) -> None:
+        if self.pending_compaction is not None:
+            fresh = dict(self.active.current_context) if self.active is not None and self.compaction_context_seen else None
+            self.gap("上下文压缩后的统计连续性未获确认，用量可能不完整。")
+            if fresh is not None:
+                self.active.set_context(fresh)
 
     def handle(self, record: Any) -> None:
         if not isinstance(record, dict):
@@ -350,7 +551,7 @@ class _Reader:
         # Ignore all messages, reasoning, tool bodies, and unknown record types.
         if kind == "compacted":
             if self.verified:
-                self.gap("上下文压缩改变了统计基线，用量可能不完整。")
+                self.compact()
             return
         if kind != "event_msg" or not isinstance(payload, dict):
             return
@@ -361,7 +562,7 @@ class _Reader:
             raise UsageLogError("用量事件之前缺少任务身份记录。")
         timestamp = _timestamp(record.get("timestamp"))
         if event in {"context_compacted", "thread_compacted"}:
-            self.gap("上下文压缩改变了统计基线，用量可能不完整。")
+            self.compact()
         elif event == "task_started":
             self.start(payload, timestamp)
         elif event in {"task_complete", "turn_aborted"}:
@@ -384,6 +585,8 @@ class _Reader:
         if turn is not None:
             if turn.status == "running":
                 turn.set_context(metadata)
+                if self.pending_compaction is not None and self.active is turn:
+                    self.compaction_context_seen = True
             return
         if turn_id not in self.pending_contexts:
             if len(self.pending_contexts) >= MAX_PENDING_CONTEXTS:
@@ -449,11 +652,12 @@ class _Reader:
         if turn_id in self.turns:
             # Replayed starts never clear the baseline or reopen completed turns.
             return
+        self.flush_compaction()
         if self.active is not None:
             self.active.mark("记录到下一轮开始，但未记录到本轮结束。")
             self.active.status = "interrupted"
             self.active.ended_at = timestamp
-        self.active = _Turn(turn_id, self.thread_id, timestamp)
+        self.active = _Turn(turn_id, self.thread_id, timestamp, override_windows=self.override_windows)
         self.attach_context(self.active)
         self.turns[turn_id] = self.active
 
@@ -470,11 +674,13 @@ class _Reader:
             return
         turn = self.turns.get(turn_id)
         if turn is None:
-            turn = _Turn(turn_id, self.thread_id, None, started=False)
+            turn = _Turn(turn_id, self.thread_id, None, started=False, override_windows=self.override_windows)
             self.attach_context(turn)
             self.turns[turn_id] = turn
         elif turn.status != "running":
             return
+        if self.active is turn:
+            self.flush_compaction()
         turn.status = "interrupted" if interrupted else "completed"
         turn.ended_at = timestamp
         if self.active is turn:
@@ -509,12 +715,23 @@ class _Reader:
                 turn.mark("已排除其他轮次的 token 记录。")
             turn = None
 
+        if self.pending_compaction is not None:
+            pending_turn, pending_total = self.pending_compaction
+            if turn is not None and turn.id == pending_turn and total == pending_total:
+                self.pending_compaction = None
+                self.compaction_context_seen = False
+            else:
+                self.flush_compaction()
         repeated = total == self.previous_total
         if turn is None:
             self.warn("已排除无法归属到进行中轮次的用量。")
         elif repeated:
             if self.baseline_valid:
                 self.add_usage(turn, {key: 0 for key in total}, timestamp, last)
+                # A verified zero delta closes the previous metadata interval.
+                # Later usage is covered by the current explicit context even
+                # when the model changed before this duplicate snapshot.
+                turn.reset_interval()
             else:
                 turn.mark("缺少完整的起始 token 基线。")
         elif self.baseline_valid and self.previous_total is not None:
@@ -544,11 +761,19 @@ class _Reader:
         warnings = list(self.warnings)
         if self.fork_history_start is not None and not self.fork_owned_history:
             warnings.append("已核实子任务身份，尚未读到自身记录；继承的父任务用量不计入。")
+        turns = [turn.export() for turn in self.turns.values()]
+        if self.pending_compaction is not None:
+            note = "正在核验压缩后的统计连续性。"
+            warnings.append(note)
+            for turn in turns:
+                if turn["id"] == self.pending_compaction[0]:
+                    turn["quality"] = "partial" if turn["tokens"] is not None else "unavailable"
+                    turn["note"] = note + " " + turn["note"]
         return {
             "threadId": self.thread_id,
             "identityVerified": self.verified,
             "conversationMetadata": dict(self.source_metadata),
-            "turns": [turn.export() for turn in self.turns.values()],
+            "turns": turns,
             "warnings": warnings,
             "sourceNote": _SOURCE_NOTE,
         }
@@ -573,10 +798,12 @@ class UsageLogReader:
     the documented local adapter expects an append-only active log.
     """
 
-    def __init__(self, expected_thread_id: str, *, byte_budget: int = MAX_READ_BYTES):
+    def __init__(self, expected_thread_id: str, *, byte_budget: int = MAX_READ_BYTES, override_windows=None):
         if _identifier(expected_thread_id) is None:
             raise UsageLogError("需要有效的任务编号。")
         self._thread_id = expected_thread_id
+        _override_windows(override_windows)
+        self._override_windows = deepcopy(override_windows)
         self._line_limit = MAX_LINE_BYTES
         self._anchor_bytes = min(4096, max(1, self._line_limit // 8))
         minimum = self._line_limit + 1 + 2 * self._anchor_bytes
@@ -589,13 +816,14 @@ class UsageLogReader:
     def _reset(self, path, identity):
         self._path = path
         self._identity = identity
-        self._reader = _Reader(self._thread_id)
+        self._reader = _Reader(self._thread_id, override_windows=self._override_windows)
         self._offset = 0
         self._observed_size = None
         self._mtime_ns = None
         self._prefix = None
         self._tail = None
         self._skipping = False
+        self._large_record = None
         self._waiting_at_end = False
         self._failure = None
 
@@ -603,10 +831,25 @@ class UsageLogReader:
         tail = raw[-self._anchor_bytes:]
         self._tail = (self._offset - len(tail), len(tail), hashlib.sha256(tail).digest())
 
+    def _consume_large_record(self, raw):
+        final = raw.endswith(b"\n")
+        self._large_record.feed(raw, final=final)
+        self._skipping = not final
+        if final:
+            envelope = self._large_record.result()
+            self._large_record = None
+            if envelope is None:
+                self._reader.gap("已跳过过大的单条记录，无法核实其类型，用量可能不完整。")
+            else:
+                try:
+                    self._reader.handle(envelope)
+                except UsageLogError as exc:
+                    self._poison(str(exc))
+
     def _poison(self, message):
         self._failure = message
         # Never return cached totals after discovering a foreign session later.
-        self._reader = _Reader(self._thread_id)
+        self._reader = _Reader(self._thread_id, override_windows=self._override_windows)
         raise UsageLogError(message)
 
     def _result(self, file_bytes):
@@ -717,13 +960,15 @@ class UsageLogReader:
                     if self._skipping:
                         self._offset += len(raw)
                         self._remember_tail(raw)
-                        self._skipping = not raw.endswith(b"\n")
+                        self._consume_large_record(raw)
                         continue
                     if len(raw) > self._line_limit:
-                        self._reader.gap("已跳过过大的单条记录，用量可能不完整。")
-                        self._offset += len(raw)
-                        self._remember_tail(raw)
-                        self._skipping = not raw.endswith(b"\n")
+                        # Revisit the large value in small validated chunks. The
+                        # detection read still counts toward the byte budget,
+                        # but never runs a 4 MiB Python scan in one time slice.
+                        self._large_record = _LargeRecordEnvelope()
+                        self._skipping = True
+                        stream.seek(line_start)
                         continue
                     if not raw.endswith(b"\n"):
                         # Neither parse nor cache an unfinished line. On a budget

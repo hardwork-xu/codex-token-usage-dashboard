@@ -47,6 +47,15 @@ class PricingTests(unittest.TestCase):
         self.assertIn("不代表订阅实际扣款", result["note"])
         self.assertEqual(result["breakdown"]["uncachedInput"]["tokens"], 10000)
 
+    def test_sol_6_1_recorded_ultrafast_uses_published_sixfold_credit_rate(self):
+        self.turn.update(model="gpt-6.1-sol", serviceTier="ultrafast", pricingMetadataStatus="known")
+        self.settings["speedMode"] = "standard"
+        result = self.estimate()
+        # 0.5 uncached + 0.225 cached + 1.25 output, all times six.
+        self.assertEqual(result["credits"], "11.850000")
+        self.assertEqual(result["estimateBasis"], "ultrafast")
+        self.assertEqual(result["unpricedTokens"], 0)
+
     def test_unknown_speed_is_one_midpoint_estimate(self):
         self.settings["speedMode"] = "auto"
         result = self.estimate()
@@ -106,7 +115,7 @@ class PricingTests(unittest.TestCase):
                 self.assertEqual(result["breakdown"]["multiplier"], "2")
                 self.assertIn("不用于推算订阅内含额度", result["note"])
 
-    def test_ultrafast_requires_astra_and_explicit_evidence_or_scenario(self):
+    def test_ultrafast_requires_supported_model_and_explicit_evidence_or_scenario(self):
         self.settings["speedMode"] = "ultrafast"
         result = self.estimate()
         self.assertEqual(result["credits"], "66.000000")
@@ -119,12 +128,35 @@ class PricingTests(unittest.TestCase):
         self.assertIn("记录中的 Ultrafast", self.estimate()["note"])
         self.turn["pricingMetadataStatus"] = "unknown"
         self.assertEqual(self.estimate()["credits"], "16.500000")
-        for model in ("gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.4-mini"):
+        for model in ("gpt-6-sol", "gpt-5.6-sol", "gpt-5.4-mini"):
             self.turn.update(model=model, pricingMetadataStatus="known")
             for speed in ("auto", "ultrafast"):
                 with self.subTest(model=model, speed=speed):
                     self.settings["speedMode"] = speed
                     self.assertUnavailable(self.estimate())
+
+    def test_bound_speed_override_requires_projected_event_day(self):
+        self.settings.update(speedMode="standard", speedOverrides={"2026-10-05": "fast"},
+                             speedOverrideWindows={"2026-10-05": {"startAt": 100, "endAt": 200, "timeZone": "UTC"}})
+        self.turn["usageSlices"] = [{"day": "2026-10-05", "model": "gpt-6-astra",
+                                     "serviceTier": None, "pricingMetadataStatus": "unknown",
+                                     "apiContext": "short", "tokens": self.turn["tokens"]}]
+        self.assertEqual(self.estimate()["credits"], "11.000000")
+        self.turn["usageSlices"][0]["speedOverrideDay"] = None
+        self.assertEqual(self.estimate()["credits"], "11.000000")
+        self.turn["usageSlices"][0].update(day="2026-10-06", speedOverrideDay="2026-10-05")
+        self.assertEqual(self.estimate()["credits"], "22.000000")
+        self.turn["usageSlices"][0].update(serviceTier="standard", pricingMetadataStatus="known")
+        self.assertEqual(self.estimate()["credits"], "11.000000")
+
+    def test_legacy_speed_override_without_window_remains_an_explicit_scenario(self):
+        self.settings.update(speedMode="standard", speedOverrides={"2026-10-05": "fast"}, speedOverrideWindows={})
+        self.turn["usageSlices"] = [{"day": "2026-10-05", "speedOverrideDay": None, "model": "gpt-6-astra",
+                                     "serviceTier": None, "pricingMetadataStatus": "unknown",
+                                     "apiContext": "short", "tokens": self.turn["tokens"]}]
+        self.assertEqual(self.estimate()["credits"], "22.000000")
+        self.turn["usageSlices"][0]["speedOverrideDay"] = "invalid-date"
+        self.assertUnavailable(self.estimate())
 
     def test_new_sol_cached_credit_rate_does_not_relabel_previous_sol(self):
         self.turn["tokens"].update(input=1000000, cachedInput=1000000, output=0,

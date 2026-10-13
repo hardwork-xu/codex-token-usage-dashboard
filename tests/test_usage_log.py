@@ -73,7 +73,7 @@ class UsageLogTests(unittest.TestCase):
         result = usage_log.read_usage_log(self.path, expected)
         for turn in result["turns"]:
             slices = turn["usageSlices"]
-            self.assertTrue(all(set(item) == {"day", "model", "serviceTier", "pricingMetadataStatus", "apiContext", "tokens"}
+            self.assertTrue(all(set(item) == {"day", "speedOverrideDay", "model", "serviceTier", "pricingMetadataStatus", "apiContext", "tokens"}
                                 and item["pricingMetadataStatus"] in {"known", "unknown"} for item in slices))
             if turn["tokens"] is None:
                 self.assertEqual(slices, [])
@@ -175,8 +175,217 @@ class UsageLogTests(unittest.TestCase):
         ])
         turn = result["turns"][0]
         self.assertEqual(turn["tokens"]["total"], 200)
+        self.assertEqual(turn["quality"], "complete")
+        self.assertNotIn("压缩", turn["note"])
+
+    def test_compaction_changed_counter_retains_partial_and_only_last_call(self):
+        result = self.read([
+            META, start(), context(service_tier="fast"), snapshot(counters()),
+            {"type": "compacted", "payload": {}},
+            snapshot(counters(240, 60, 30, 15), counters()), stop(),
+        ])
+        turn = result["turns"][0]
+        self.assertEqual(turn["tokens"]["total"], 200)
         self.assertEqual(turn["quality"], "partial")
-        self.assertIn("压缩", turn["note"])
+        self.assertIsNone(turn["usageSlices"][-1]["model"])
+
+    def test_compaction_waiting_for_proof_stays_partial_without_mutating_reader(self):
+        reader = usage_log._Reader(THREAD)
+        for record in [META, start(), context(), snapshot(counters()), {"type": "compacted"}]:
+            reader.handle(record)
+        self.assertEqual(reader.result()["turns"][0]["quality"], "partial")
+        reader.handle(snapshot(counters()))
+        self.assertEqual(reader.result()["turns"][0]["quality"], "complete")
+        self.assertEqual(reader.result()["turns"][0]["model"], "gpt-6-astra")
+
+    def test_compaction_stop_without_duplicate_counter_stays_partial(self):
+        turn = self.read([META, start(), snapshot(counters()), {"type": "compacted"}, stop()])["turns"][0]
+        self.assertEqual(turn["quality"], "partial")
+
+    def test_compaction_and_unknown_gap_cannot_restore_previous_context(self):
+        turn = self.read([META, start(), context(), snapshot(counters()),
+                          {"type": "compacted"}, None, snapshot(counters()),
+                          snapshot(counters(160, 40, 20, 10), counters()), stop()])["turns"][0]
+        self.assertEqual(turn["quality"], "partial")
+        self.assertIsNone(turn["usageSlices"][-1]["model"])
+
+    def test_compaction_failed_proof_preserves_new_explicit_context(self):
+        turn = self.read([META, start(), context(), snapshot(counters()),
+                          {"type": "compacted"}, context(model="gpt-6-sol", service_tier="fast"),
+                          snapshot(counters(240, 60, 30, 15), counters()), stop()])["turns"][0]
+        self.assertEqual(turn["quality"], "partial")
+        self.assertEqual(turn["usageSlices"][-1]["model"], "gpt-6-sol")
+        self.assertEqual(turn["usageSlices"][-1]["serviceTier"], "fast")
+
+    def test_same_turn_model_and_speed_switches_conserve_prices_and_days(self):
+        from decimal import Decimal
+        from pricing import estimate_turn
+        from periods import summarize_periods
+        turn = self.read([
+            META, start(), context(service_tier="standard"), snapshot(counters(100000, 10000, 20000, 2000)),
+            context(model="gpt-6-sol", service_tier="fast"),
+            snapshot(counters(200000, 20000, 40000, 4000), counters(100000, 10000, 20000, 2000)),
+            context(service_tier="standard"),
+            snapshot(counters(300000, 30000, 60000, 6000), counters(100000, 10000, 20000, 2000)), stop(),
+        ])["turns"][0]
+        settings = {"pricingMode": "api", "speedMode": "ultrafast", "currencyPerUsd": "1"}
+        price = estimate_turn(turn, settings)
+        # Astra twice: API 2 * (0.8 + 0.02 + 0.5), Credits 2 * 33.
+        # Sol Fast once: API 0.16 + 0.004 + 0.1, Credits 6.6 * 2.
+        self.assertEqual(Decimal(price["usd"]), Decimal("2.904"))
+        self.assertEqual(Decimal(price["creditEstimate"]["credits"]), Decimal("79.2"))
+        self.assertEqual(sum(row["tokens"]["total"] for row in turn["usageSlices"]), 330000)
+        self.assertEqual({(row["model"], row["serviceTier"]): row["tokens"]["total"] for row in turn["usageSlices"]},
+                         {("gpt-6-astra", "standard"): 220000, ("gpt-6-sol", "fast"): 110000})
+        summaries = summarize_periods([turn], settings, now=datetime.fromtimestamp(turn["endedAt"]).date())
+        self.assertEqual(summaries["today"]["tokens"]["total"], 330000)
+        self.assertEqual(summaries["today"]["usd"], price["usd"])
+        self.assertEqual(summaries["today"]["creditEstimate"]["credits"], price["creditEstimate"]["credits"])
+
+    def test_verified_duplicate_closes_model_interval_with_or_without_compaction(self):
+        for compact in ([], [{"type": "compacted"}]):
+            with self.subTest(compact=bool(compact)):
+                turn = self.read([
+                    META, start(), context(service_tier="standard"), snapshot(counters()),
+                    *compact, context(model="gpt-6-sol", service_tier="fast"), snapshot(counters()),
+                    snapshot(counters(240, 60, 30, 15), counters()), stop(),
+                ])["turns"][0]
+                self.assertEqual(turn["quality"], "complete")
+                self.assertEqual([(x["model"], x["serviceTier"], x["tokens"]["total"]) for x in turn["usageSlices"]],
+                                 [("gpt-6-astra", "standard", 100), ("gpt-6-sol", "fast", 200)])
+
+    def test_bound_speed_day_uses_utc_window_and_survives_local_timezone_change(self):
+        from decimal import Decimal
+        from zoneinfo import ZoneInfo
+        from pricing import estimate_turn
+        begin = int(datetime.fromisoformat("2026-10-04T21:00:00+00:00").timestamp())
+        end = begin + 86400
+        windows = {"2026-10-05": {"startAt": begin, "endAt": end, "timeZone": "Africa/Cairo"}}
+        records = [META, start(), context()]
+        for index, timestamp in enumerate((begin - 1, begin, end - 1, end), 1):
+            records.append({**snapshot(counters(index * 100, 0, 0, 0), counters(100, 0, 0, 0)),
+                            "timestamp": timestamp})
+        records.append(stop())
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in records))
+        settings = {"pricingMode": "api", "currencyPerUsd": "1", "speedMode": "standard",
+                    "speedOverrides": {"2026-10-05": "fast"}, "speedOverrideWindows": windows}
+        prices, dates = [], []
+        for zone in ("Africa/Cairo", "Asia/Shanghai"):
+            with mock.patch.object(usage_log, "_local_day", lambda value: datetime.fromtimestamp(value, ZoneInfo(zone)).date().isoformat() if value is not None else None):
+                turn = usage_log.UsageLogReader(THREAD, override_windows=windows).read(self.path)["turns"][0]
+            bound = sum(row["tokens"]["total"] for row in turn["usageSlices"] if row["speedOverrideDay"] == "2026-10-05")
+            self.assertEqual(bound, 200)
+            self.assertEqual(sum(row["tokens"]["total"] for row in turn["usageSlices"] if row["speedOverrideDay"] is None), 200)
+            price = estimate_turn(turn, settings)
+            prices.append(price["creditEstimate"]["credits"])
+            dates.append(turn["dailyUsage"])
+            self.assertEqual(Decimal(price["usd"]), Decimal("0.004"))
+        self.assertNotEqual(dates[0], dates[1])
+        self.assertEqual(prices, ["0.150000", "0.150000"])
+
+    def test_speed_windows_reject_bad_types_and_overlaps(self):
+        invalid = [False, [], {"2026-10-05": {"startAt": True, "endAt": 10}},
+                   {"2026-10-05": {"startAt": 20, "endAt": 10}},
+                   {"not-a-date": {"startAt": 0, "endAt": 10}},
+                   {"2026-10-05": {"startAt": 0, "endAt": 10},
+                    "2026-10-06": {"startAt": 9, "endAt": 20}}]
+        for windows in invalid:
+            with self.subTest(windows=windows), self.assertRaises(ValueError):
+                usage_log.UsageLogReader(THREAD, override_windows=windows)
+
+    def test_large_verified_response_keeps_context_and_all_usage(self):
+        with mock.patch.object(usage_log, "MAX_LINE_BYTES", 1024):
+            turn = self.read([
+                META, start(), context(service_tier="standard"), snapshot(counters()),
+                {"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": "private" * 1000}},
+                snapshot(counters(160, 40, 20, 10), counters()), stop(),
+            ])["turns"][0]
+        self.assertEqual(turn["tokens"]["total"], 200)
+        self.assertEqual(turn["quality"], "complete")
+        self.assertEqual(turn["model"], "gpt-6-astra")
+        self.assertEqual(turn["serviceTier"], "standard")
+        self.assertNotIn("private", json.dumps(turn))
+
+    def test_large_response_cannot_hide_following_model_or_speed_switch(self):
+        with mock.patch.object(usage_log, "MAX_LINE_BYTES", 1024):
+            turn = self.read([
+                META, start(), context(service_tier="standard"), snapshot(counters()),
+                {"type": "response_item", "payload": {"output": "x" * 8000}},
+                context(model="gpt-6-sol", service_tier="fast"),
+                snapshot(counters(160, 40, 20, 10), counters()), stop(),
+            ])["turns"][0]
+        self.assertEqual([(x["model"], x["serviceTier"], x["tokens"]["total"]) for x in turn["usageSlices"]],
+                         [("gpt-6-astra", "standard", 100), ("gpt-6-sol", "fast", 100)])
+
+    def test_large_turn_context_stays_a_gap_and_cannot_restore_old_model(self):
+        with mock.patch.object(usage_log, "MAX_LINE_BYTES", 1024):
+            turn = self.read([META, start(), context(), snapshot(counters()),
+                              context(model="gpt-6-sol", private="x" * 6000),
+                              snapshot(counters(160, 40, 20, 10), counters()), stop()])["turns"][0]
+        self.assertEqual(turn["quality"], "partial")
+        self.assertIsNone(turn["usageSlices"][-1]["model"])
+
+    def test_large_compaction_requires_counter_proof(self):
+        with mock.patch.object(usage_log, "MAX_LINE_BYTES", 1024):
+            turn = self.read([META, start(), context(), snapshot(counters()),
+                              {"type": "compacted", "payload": {"message": "x" * 6000}},
+                              snapshot(counters()), snapshot(counters(160, 40, 20, 10), counters()), stop()])["turns"][0]
+        self.assertEqual(turn["quality"], "complete")
+        self.assertEqual(turn["model"], "gpt-6-astra")
+        self.assertEqual(turn["tokens"]["total"], 200)
+
+    def test_large_envelope_validates_utf8_escapes_and_keeps_no_payload(self):
+        value = {"payload": {"content": ["私人文本é\\x\n" * 100, {"nested": [None, True, 3.2e4]}]},
+                 "ordinal": 42, "type": "response_item"}
+        raw = (json.dumps(value, ensure_ascii=False) + "\n").encode()
+        probe = usage_log._LargeRecordEnvelope()
+        for index in range(0, len(raw), 7):
+            probe.feed(raw[index:index + 7], final=index + 7 >= len(raw))
+        self.assertEqual(probe.result(), {"type": "response_item", "ordinal": 42})
+        self.assertNotIn("私人文本", repr(probe.__dict__))
+
+    def test_large_envelope_rejects_duplicate_forged_or_malformed_metadata(self):
+        cases = [
+            b'{"type":"response_item","type":"turn_context","payload":{}}\n',
+            b'{"type":"turn_context","type":"response_item","payload":{}}\n',
+            b'{"type":"response_item","ordinal":4,"ordinal":5}\n',
+            b'{"type":"response_item","payload":{"x":1,}}\n',
+            b'{"type":"response_item","payload":[1,]}\n',
+            b'{"type":"response_item","payload":"bad\\q"}\n',
+            b'{"type":"response_item","payload":"bad\xff"}\n',
+            b'{"type":"response_item","ordinal":true}\n',
+            b'{"type":"response_item","ordinal":1.5}\n',
+            b'{"type":"response_item","payload":01}\n',
+            b'{"type":"response_item"} {"type":"turn_context"}\n',
+        ]
+        for raw in cases:
+            with self.subTest(raw=raw):
+                probe = usage_log._LargeRecordEnvelope()
+                for index in range(0, len(raw), 3):
+                    probe.feed(raw[index:index + 3], final=index + 3 >= len(raw))
+                self.assertIsNone(probe.result())
+
+    def test_large_session_header_cannot_bypass_identity_verification(self):
+        for thread in (THREAD, "foreign-thread"):
+            with self.subTest(thread=thread), mock.patch.object(usage_log, "MAX_LINE_BYTES", 1024):
+                # Its complete envelope proves this is identity metadata, but
+                # its payload is deliberately not retained or used to grant trust.
+                with self.assertRaises(usage_log.UsageLogError):
+                    self.read([META, start(), snapshot(counters()),
+                               {"type": "session_meta", "payload": {"id": thread, "private": "x" * 6000}},
+                               snapshot(counters(160, 40, 20, 10), counters()), stop()])
+
+    def test_large_envelope_fork_ordinals_still_require_monotonicity(self):
+        records = numbered([fork_meta(boundary=1), start(), context(), snapshot(counters()),
+                            {"type": "response_item", "payload": {"output": "x" * 6000}},
+                            snapshot(counters(160, 40, 20, 10), counters()), stop()])
+        with mock.patch.object(usage_log, "MAX_LINE_BYTES", 1024):
+            turn = self.read(records)["turns"][0]
+            self.assertEqual(turn["tokens"]["total"], 200)
+            self.assertEqual(turn["quality"], "complete")
+            records[4]["ordinal"] = 1
+            with self.assertRaises(usage_log.UsageLogError):
+                self.read(records)
 
     def test_foreign_session_is_rejected_without_content_in_exception(self):
         foreign = {"type": "session_meta", "payload": {"id": "secret-session-id"}}
@@ -612,14 +821,14 @@ class UsageLogTests(unittest.TestCase):
                 self.assertEqual([(item["model"], item["tokens"]["total"]) for item in turn["usageSlices"]],
                                  [("gpt-6-astra", 100), (None, 50)])
 
-    def test_replayed_zero_snapshot_does_not_erase_a_pending_boundary(self):
+    def test_verified_zero_snapshot_closes_a_pending_boundary(self):
         turn = self.read([
             META, start(), context(service_tier="standard"), snapshot(counters()),
             context(model="gpt-5.6-luna", service_tier="standard"), snapshot(counters()),
             snapshot(counters(240, 60, 30, 15), counters()), stop(),
         ])["turns"][0]
         self.assertEqual([(item["model"], item["tokens"]["total"]) for item in turn["usageSlices"]],
-                         [("gpt-6-astra", 100), (None, 100), ("gpt-5.6-luna", 100)])
+                         [("gpt-6-astra", 100), ("gpt-5.6-luna", 200)])
 
     def test_dated_and_undated_slices_keep_all_six_counters(self):
         first, second, third = snapshot(counters()), snapshot(counters(160, 40, 20, 10), counters()), snapshot(counters(240, 60, 30, 15), counters())

@@ -160,14 +160,63 @@ class DescendantTests(unittest.TestCase):
             self.assertEqual(result["threads"], [])
             self.assertIsNotNone(result["error"])
 
-    def test_unregistered_or_unverified_root_never_queries_codex(self):
+    def test_unregistered_or_known_subagent_root_never_queries_codex(self):
         with mock.patch.object(descendants, "JsonRpcProcess") as transport:
             with self.assertRaises(ValueError):
                 descendants.discover_descendants({}, "root", "synthetic-codex")
-            Path(self.root).write_text('[]\n', encoding="utf-8")
+            self.log("root", "parent")
             result = descendants.discover_descendants(self.records, "root", "synthetic-codex")
             self.assertIsNotNone(result["error"])
             transport.assert_not_called()
+
+    def metadata(self, **extra):
+        return {"id": 2, "result": {"thread": {"id": "root", "source": "vscode",
+                "preview": "private-root-preview", **extra}}}
+
+    def test_missing_root_uses_exact_id_metadata_then_verified_descendants(self):
+        Path(self.root).unlink()
+        child = self.row("child")
+        result, sent, _ = self.run_discovery([self.metadata(), self.page([child], request=3)])
+        self.assertEqual([row["threadId"] for row in result["threads"]], ["child"])
+        self.assertEqual(sent[2], {"id": 2, "method": "thread/read",
+                                  "params": {"threadId": "root", "includeTurns": False}})
+        self.assertEqual(sent[3]["params"]["ancestorThreadId"], "root")
+        self.assertTrue(result["complete"])
+        self.assertIsNone(result["rootPath"])
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_missing_root_wrong_identity_or_nonmain_metadata_never_lists(self):
+        Path(self.root).unlink()
+        for value in ({"id": "other"}, {"source": "subagent"}, {"source": "unknown"},
+                      {"source": {"subagent": {"thread_spawn": {"parent_thread_id": "other"}}}},
+                      {"parentThreadId": "other"}):
+            with self.subTest(value=value):
+                result, sent, _ = self.run_discovery([self.metadata(**value)], cursor="saved")
+                self.assertEqual(result["threads"], [])
+                self.assertIsNotNone(result["error"])
+                self.assertEqual(result["nextCursor"], "saved")
+                self.assertNotIn("thread/list", [row["method"] for row in sent])
+
+    def test_replacement_root_path_requires_own_header_identity(self):
+        original = Path(self.root)
+        replacement = self.folder / "moved-root.jsonl"
+        original.rename(replacement)
+        result, _, _ = self.run_discovery([self.metadata(path=str(replacement)), self.page([], request=3)])
+        self.assertEqual(result["rootPath"], str(replacement))
+        for bad_path in (self.log("foreign"), self.log("root", "parent")):
+            original.unlink(missing_ok=True)
+            result, _, _ = self.run_discovery([self.metadata(path=bad_path), self.page([], request=3)])
+            self.assertIsNone(result["rootPath"])
+
+    def test_missing_root_metadata_failure_preserves_cursor_and_private_errors(self):
+        Path(self.root).unlink()
+        result, sent, _ = self.run_discovery([{"id": 2, "error": {"message": "private-root-error"}}], cursor="saved")
+        self.assertEqual(result["nextCursor"], "saved")
+        self.assertFalse(result["complete"])
+        self.assertIsNotNone(result["error"])
+        self.assertEqual(result["threads"], [])
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("thread/list", [row["method"] for row in sent])
 
     def test_budget_and_cursor_inputs_are_bounded(self):
         for options in ({"max_pages": 0}, {"max_pages": True}, {"max_pages": 6},

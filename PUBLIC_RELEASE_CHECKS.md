@@ -54,3 +54,10 @@ After any code, packaging or documentation changes, repeat the relevant checks o
 - Check account-scoped balance history, positive/negative net changes, expiry/top-up ambiguity, and protection of `credit-balances.json`. Never commit an actual account snapshot, opaque account identifier, or real thread usage.
 - Test public per-thread usage micro-unit conversion, mismatched IDs, absent `threadUsage`, read failure, unregistered IDs, concurrent requests and the refresh cooldown. Server estimates are not wallet debits; local estimates must not fill a missing server record.
 - Verify the existing macOS owned runtime upgrades atomically when a newly added runtime module was absent in the previous version; a damaged current runtime must still fail safely.
+
+## Historical coverage and timezone stability
+
+- Page the complete registered history after task filtering, including records older than the overview cap. Check insertion between pages, equal timestamps, settings changes, failed requests, and stale responses. A cursor reaching the end cannot by itself prove all currently reported records were shown.
+- Restart descendant discovery during active and archived pagination. Preserve checkpoints and registry merges; failed metadata-only root verification must never expand into unfiltered discovery.
+- Oversized non-accounting records require full bounded JSON envelope validation before preserving counter/model context. Oversized identity or accounting metadata must remain rejected or uncertain. Compaction continuity needs an unchanged, attributable counter; model/speed changes after a confirmed zero increment must not inherit an obsolete boundary.
+- Bind date-specific speed declarations to UTC windows and verify identical all-history Credits across display timezones, including exact start/end boundaries and same-question mixed recorded speeds. Missing legacy timezone metadata must stay explicit. Keep original event-day summaries and six-counter conservation intact.

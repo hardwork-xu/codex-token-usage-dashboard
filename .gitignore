@@ -19,6 +19,7 @@ credit-balances.json
 endpoint.json
 settings.json
 titles.json
+descendant-sync.json
 service-mode.json
 local.codex-usage-meter.plist
 *.jsonl

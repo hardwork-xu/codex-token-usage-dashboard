@@ -42,7 +42,7 @@ class IncrementalMeterTests(unittest.TestCase):
 
     def test_history_progress_becomes_live_without_recounting(self):
         self.append([{'type': 'response_item', 'payload': {'text': 'synthetic padding'}}] * 80)
-        factory = lambda thread: usage_log.UsageLogReader(thread, byte_budget=4096)
+        factory = lambda thread, **options: usage_log.UsageLogReader(thread, byte_budget=4096, **options)
         with mock.patch.object(usage_log, 'MAX_LINE_BYTES', 1024), \
                 mock.patch.object(meter, 'UsageLogReader', side_effect=factory):
             states = [self.subject.snapshot()]
@@ -111,7 +111,7 @@ class IncrementalMeterTests(unittest.TestCase):
         with mock.patch.object(meter, 'UsageLogReader', return_value=reader) as factory:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                 states = list(pool.map(lambda _: self.subject.snapshot(), range(4)))
-            factory.assert_called_once_with('synthetic-thread')
+            factory.assert_called_once_with('synthetic-thread', override_windows={})
         self.assertEqual([state['turns'][0]['tokens']['total'] for state in states], [10] * 4)
 
 

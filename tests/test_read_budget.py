@@ -142,7 +142,7 @@ class SnapshotBudgetTests(unittest.TestCase):
                 registry = self.seed(count)
                 subject = meter.Meter(self.folder)
                 calls = []
-                def factory(thread):
+                def factory(thread, **options):
                     def read(path, *, time_budget):
                         calls.append((thread, str(path), time_budget))
                         return {"turns": [], "warnings": [], "reading": {"complete": True, "bytesRead": 0, "fileBytes": 0}}
@@ -189,8 +189,8 @@ class SnapshotBudgetTests(unittest.TestCase):
         pending = next(iter(registry))
         subject = meter.Meter(self.folder)
         phase, calls = [0], []
-        def factory(thread):
-            real = usage_log.UsageLogReader(thread)
+        def factory(thread, **options):
+            real = usage_log.UsageLogReader(thread, **options)
             def read(path, *, time_budget):
                 calls.append((thread, time_budget))
                 result = real.read(path, time_budget=time_budget)
@@ -233,8 +233,8 @@ class SnapshotBudgetTests(unittest.TestCase):
         changed = next(iter(registry))
         subject = meter.Meter(self.folder)
         calls = []
-        def factory(thread):
-            real = usage_log.UsageLogReader(thread)
+        def factory(thread, **options):
+            real = usage_log.UsageLogReader(thread, **options)
             def read(path, *, time_budget):
                 calls.append((thread, time_budget))
                 return real.read(path, time_budget=time_budget)
@@ -268,8 +268,8 @@ class SnapshotBudgetTests(unittest.TestCase):
         broken = next(iter(registry))
         subject = meter.Meter(self.folder)
         fail, calls = [False], []
-        def factory(thread):
-            real = usage_log.UsageLogReader(thread)
+        def factory(thread, **options):
+            real = usage_log.UsageLogReader(thread, **options)
             def read(path, *, time_budget):
                 calls.append((thread, time_budget))
                 if fail[0] and thread == broken:
