@@ -620,7 +620,7 @@ class UsageLogTests(unittest.TestCase):
         self.assertEqual(set(result["turns"][0]), {
             "id", "threadId", "startedAt", "endedAt", "status", "quality", "note", "tokens",
             "model", "serviceTier", "pricingMetadataStatus",
-            "dailyUsage", "undatedTokens", "usageSlices",
+            "dailyUsage", "undatedTokens", "usageSlices", "usageSegments",
         })
 
     def test_unknown_completion_does_not_hijack_active_turn(self):

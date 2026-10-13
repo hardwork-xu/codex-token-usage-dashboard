@@ -23,7 +23,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import request, error, parse
 
-from usage_log import read_usage_log, UsageLogReader
+from usage_log import read_usage_log, UsageLogReader, reproject_usage
+from usage_archive import UsageArchive
 from pricing import estimate_turn
 from official_credits import (account_scope, credits_from_response, credit_view,
                               record_balance, fetch_thread_usage, thread_usage_view)
@@ -90,7 +91,17 @@ def locked(folder, name="registry"):
 def register(folder, path, thread_id):
     """Only the exact caller-provided log. No discovery or recursive scanning."""
     path = Path(path).expanduser().absolute()
-    result = read_usage_log(path, thread_id)
+    try:
+        result = read_usage_log(path, thread_id)
+    except Exception as exc:
+        if getattr(exc, "identity_rejected", False) is True:
+            records = read_json(folder / "registry.json", {})
+            previous = records.get(thread_id) if isinstance(records, dict) else None
+            # A mistaken new hook path must not revoke an unrelated valid
+            # registration. Only reject the path already being monitored.
+            if isinstance(previous, dict) and previous.get("path") == str(path):
+                UsageArchive(folder).invalidate(thread_id)
+        raise
     if result.get("identityVerified") is not True:
         raise ValueError("尚未核实这份记录的任务编号，请稍后重试")
     with locked(folder):
@@ -101,6 +112,9 @@ def register(folder, path, thread_id):
         previous = previous if isinstance(previous, dict) else {}
         records[thread_id] = {**previous, "path": str(path), "registeredAt": previous.get("registeredAt", time.time())}
         write_json(folder / "registry.json", records)
+    # Hooks also preserve the numeric prefix they actually read, even when the
+    # dashboard is closed. Large histories remain explicitly incomplete.
+    UsageArchive(folder).save(thread_id, result)
     return {"threadId": thread_id, "turnCount": len(result["turns"])}
 
 
@@ -178,7 +192,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.13.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.14.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -377,6 +391,7 @@ class Meter:
         self.folder = folder
         self.folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.cache = {}
+        self.archive = UsageArchive(folder)
         self.reader_incomplete = {}
         self.reader_override_windows = None
         self.snapshot_lock = threading.Lock()
@@ -730,6 +745,7 @@ class Meter:
             self.reader_incomplete.clear()
             self.reader_override_windows = deepcopy(windows)
         readings, read_errors, successful_reads, metadata = {}, {}, 0, {}
+        archives, archive_errors = {}, 0
         self.cache = {key: reader for key, reader in self.cache.items() if key in records}
         self.reader_incomplete = {key: value for key, value in self.reader_incomplete.items() if key in records}
         # Freeze this pass's shares before reads change their completion state.
@@ -737,6 +753,8 @@ class Meter:
         weights = {key: 100 if self.reader_incomplete.get(key, True) else 1 for key in records}
         total_weight = sum(weights.values())
         for thread_id, record in records.items():
+            result, saved, archive_reason = None, None, None
+            reader = None
             try:
                 path = Path(record["path"])
                 reader = self.cache.get(thread_id)
@@ -747,10 +765,6 @@ class Meter:
                 self.reader_incomplete[thread_id] = not (isinstance(reading, dict) and reading.get("complete") is True)
                 successful_reads += 1
                 readings[thread_id] = result.get("reading")
-                metadata[thread_id] = result.get("conversationMetadata", {})
-                turns.extend(dict(turn) for turn in result["turns"])
-                if result.get("warnings"):
-                    errors.extend(result["warnings"])
             except Exception:
                 self.reader_incomplete[thread_id] = True
                 # Do not display stale last-good token totals as a new successful read.
@@ -758,6 +772,57 @@ class Meter:
                 # a later chunk must not revive an earlier prefix next refresh.
                 read_errors[thread_id] = "这段对话的记录暂时无法读取，请稍后刷新。"
                 errors.append("某个已登记任务的记录暂不可读或格式已变化")
+            try:
+                if reader is not None and reader.identity_rejected is True:
+                    # A later contradictory session invalidates the earlier
+                    # prefix, including across worker restarts.
+                    self.archive.invalidate(thread_id)
+                elif result is not None and result.get("identityVerified") is True:
+                    outcome = self.archive.save(thread_id, result)
+                    saved = {"savedAt": outcome.get("savedAt")}
+                    if outcome.get("retained"):
+                        saved = self.archive.load(thread_id)
+                        archive_reason = ("backfilling" if self.reader_incomplete.get(thread_id)
+                                          else "source_changed")
+                        if saved:
+                            result = reproject_usage(saved["result"], windows)
+                        else:
+                            result = None
+                            read_errors[thread_id] = "这段对话的保存记录已失效，完整重新核验前不使用其用量。"
+                            errors.append("某个任务仍在重新核验身份，未恢复此前被排除的数据")
+                elif result is None or result.get("identityVerified") is not True:
+                    saved = self.archive.load(thread_id)
+                    if saved:
+                        result = reproject_usage(saved["result"], windows)
+                        archive_reason = "source_unavailable" if thread_id in read_errors else "backfilling"
+            except Exception:
+                archive_errors += 1
+                errors.append("本地明细保存或校验失败，请检查数据目录；尚未确认持久保存")
+            if saved and saved.get("savedAt") is not None:
+                archives[thread_id] = {"savedAt": saved["savedAt"],
+                                       "source": "archive" if archive_reason else "live",
+                                       "reason": archive_reason}
+            if result is not None:
+                metadata[thread_id] = result.get("conversationMetadata", {})
+                if archive_reason:
+                    errors.append("部分用量来自已保存明细，原日志尚未重新核对")
+                for raw_turn in result["turns"]:
+                    turn = deepcopy(raw_turn)
+                    # Detailed event observations are durable on disk; the UI
+                    # uses the smaller conserved model/speed slices.
+                    turn.pop("usageSegments", None)
+                    turn["sourceAvailability"] = "archive" if archive_reason else "live"
+                    if saved:
+                        turn["archiveSavedAt"] = saved.get("savedAt")
+                    if archive_reason:
+                        turn["readingIncomplete"] = True
+                        turn["quality"] = "partial" if turn.get("tokens") is not None else "unavailable"
+                        if turn.get("status") == "running":
+                            turn["status"] = "unknown"
+                        turn["note"] = "此前保存的用量明细，原日志尚未核对；不代表最新或完整用量。"
+                    turns.append(turn)
+                if result.get("warnings"):
+                    errors.extend(result["warnings"])
         turns.sort(key=lambda turn: turn.get("startedAt") or 0, reverse=True)
         conversations = conversation_catalog(records, turns, self.titles, metadata)
         self.descendant_roots = {row["id"]: row["lastActivityAt"] for row in conversations
@@ -765,6 +830,7 @@ class Meter:
         for conversation in conversations:
             conversation["reading"] = readings.get(conversation["id"])
             conversation["readError"] = read_errors.get(conversation["id"])
+            conversation["archive"] = archives.get(conversation["id"])
             if conversation["reading"] and not conversation["reading"]["complete"]:
                 # A historical prefix may end in an old unfinished turn.
                 conversation["activeTurnCount"] = 0
@@ -792,6 +858,10 @@ class Meter:
         quota_snapshot = deepcopy(self.quota)
         official_records = list(self.official_usage.items())
         return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
+                               "archive": {"status": "error" if archive_errors else "partial" if any(a["reason"] for a in archives.values()) else "ready",
+                                           "savedTasks": len(archives), "retainedTasks": sum(a["source"] == "archive" for a in archives.values()),
+                                           "writeErrors": archive_errors,
+                                           "lastSavedAt": max((a["savedAt"] for a in archives.values()), default=None)},
                                "coverage": {"registeredTasks": len(records), "readableTasks": successful_reads,
                                             "unreadableTasks": len(read_errors),
                                             "recoveredTasks": sum(record.get("registrationSource") == "verified_descendant"
@@ -812,7 +882,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.13.0"
+    server_version = "CodexUsageMeter/0.14.0"
 
     def log_message(self, *_):
         pass
@@ -870,7 +940,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.13.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.14.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1153,7 +1223,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.13.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.14.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

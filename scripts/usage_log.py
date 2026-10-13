@@ -334,6 +334,7 @@ class _Turn:
         self.daily_usage: dict[str, dict[str, int]] = {}
         self.undated_tokens = _empty_tokens()
         self.usage_slices: dict[tuple, dict[str, int]] = {}
+        self.usage_segments: list[dict[str, Any]] = []
         self.reasons: list[str] = []
         self.pricing = _PricingMetadata()
         self.current_context = {"model": None, "serviceTier": None, "pricingMetadataStatus": "unknown"}
@@ -377,6 +378,10 @@ class _Turn:
             # session. A short call cannot prove a short session.
             if metadata["model"] in {"gpt-5.5", "gpt-5.4"} and context == "short":
                 context = "unknown"
+            # Durable observations retain event time and the context of this
+            # increment, independently of display dates and later settings.
+            self.usage_segments.append({"timestamp": timestamp, **metadata,
+                                        "apiContext": context, "tokens": dict(amount)})
             # Cache-write mapping is not verified. Preserve the boundary so an
             # unsupported call cannot erase the priced subtotal of other calls.
             override_day = None
@@ -414,6 +419,7 @@ class _Turn:
             "tokens": dict(self.tokens) if self.tokens is not None else None,
             "dailyUsage": {day: dict(tokens) for day, tokens in self.daily_usage.items()},
             "undatedTokens": dict(self.undated_tokens),
+            "usageSegments": deepcopy(self.usage_segments),
             "usageSlices": [{"day": day, "speedOverrideDay": override_day, "model": model, "serviceTier": tier,
                              "pricingMetadataStatus": status, "apiContext": context, "tokens": dict(tokens)}
                             for (day, override_day, model, tier, status, context, _cache_write), tokens in self.usage_slices.items()],
@@ -784,6 +790,31 @@ def _ordinary_leaf(details):
             not getattr(details, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
+def reproject_usage(result, override_windows=None):
+    """Rebuild calendar and declaration buckets from saved event observations.
+
+    This never infers missing model/speed evidence or changes token totals.
+    Legacy snapshots without event segments keep their original date buckets.
+    """
+    projected = deepcopy(result)
+    windows = _override_windows(override_windows)
+    for turn in projected.get("turns", []):
+        segments = turn.get("usageSegments")
+        if not isinstance(segments, list):
+            continue
+        rebuilt = _Turn(turn["id"], turn["threadId"], turn.get("startedAt"), override_windows=windows)
+        for segment in segments:
+            rebuilt.add(segment["tokens"], segment.get("timestamp"),
+                        metadata={key: segment.get(key) for key in ("model", "serviceTier", "pricingMetadataStatus")},
+                        api_context=segment.get("apiContext"))
+        if (rebuilt.tokens or _empty_tokens()) != (turn.get("tokens") or _empty_tokens()):
+            raise UsageLogError("已保存的分段用量与合计不一致。")
+        exported = rebuilt.export()
+        for key in ("dailyUsage", "undatedTokens", "usageSlices"):
+            turn[key] = exported[key]
+    return projected
+
+
 class UsageLogReader:
     """Incrementally read one exact path, retaining only sanitized statistics.
 
@@ -850,7 +881,14 @@ class UsageLogReader:
         self._failure = message
         # Never return cached totals after discovering a foreign session later.
         self._reader = _Reader(self._thread_id, override_windows=self._override_windows)
-        raise UsageLogError(message)
+        error = UsageLogError(message)
+        error.identity_rejected = True
+        raise error
+
+    @property
+    def identity_rejected(self):
+        """A contradictory identity must also invalidate durable observations."""
+        return self._failure is not None
 
     def _result(self, file_bytes):
         complete = self._offset == file_bytes and not self._skipping and not self._waiting_at_end

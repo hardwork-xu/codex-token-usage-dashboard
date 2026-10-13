@@ -61,3 +61,10 @@ After any code, packaging or documentation changes, repeat the relevant checks o
 - Restart descendant discovery during active and archived pagination. Preserve checkpoints and registry merges; failed metadata-only root verification must never expand into unfiltered discovery.
 - Oversized non-accounting records require full bounded JSON envelope validation before preserving counter/model context. Oversized identity or accounting metadata must remain rejected or uncertain. Compaction continuity needs an unchanged, attributable counter; model/speed changes after a confirmed zero increment must not inherit an obsolete boundary.
 - Bind date-specific speed declarations to UTC windows and verify identical all-history Credits across display timezones, including exact start/end boundaries and same-question mixed recorded speeds. Missing legacy timezone metadata must stay explicit. Keep original event-day summaries and six-counter conservation intact.
+
+## Durable numeric observations
+
+- Verify each persisted event retains its timestamp, six token counters, observed model and recorded service tier without messages, credentials or computed billing amounts. Unknown fields stay unknown.
+- In an isolated fixture, remove source logs and restart the worker; preserved counters, model subtotals, API estimates and Credits estimates must stay equal while source availability becomes historical/incomplete. Reintroducing the same log must not duplicate usage. Never move a user's real source log for this test.
+- Test incomplete restart prefixes, growing partial scans, truncation, corrupted storage, failed writes, concurrent writers and durable identity invalidation. A failed archive write must not be reported as saved. Verify native Windows and macOS paths.
+- Keep `usage-archive/`, SQLite sidecars, recovery records and real source snapshots out of Git and plugin packages. Partial historical imports preserve their provenance and do not invent per-event timestamps or speeds.

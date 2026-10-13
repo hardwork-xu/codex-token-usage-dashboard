@@ -284,7 +284,11 @@ class SnapshotBudgetTests(unittest.TestCase):
             calls.clear()
             failed = subject.snapshot()
             self.assertAlmostEqual(dict(calls)[broken], 100 / 102)
-            self.assertFalse(any(turn["threadId"] == broken for turn in failed["turns"]))
+            preserved = [turn for turn in failed["turns"] if turn["threadId"] == broken]
+            self.assertTrue(preserved)
+            self.assertTrue(all(turn["sourceAvailability"] == "archive" for turn in preserved))
+            self.assertTrue(all(turn["quality"] == "partial" for turn in preserved))
+            self.assertEqual(failed["monitoring"]["coverage"]["unreadableTasks"], 1)
             del registry[broken]
             meter.write_json(self.folder / "registry.json", registry)
             calls.clear()

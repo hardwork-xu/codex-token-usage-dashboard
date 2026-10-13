@@ -20,6 +20,9 @@ endpoint.json
 settings.json
 titles.json
 descendant-sync.json
+usage-archive/
+*.sqlite3
+*.sqlite3-*
 service-mode.json
 local.codex-usage-meter.plist
 *.jsonl
