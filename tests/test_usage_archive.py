@@ -1,6 +1,7 @@
 """Durable archive tests use synthetic numeric metadata only."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from copy import deepcopy
 import hashlib
 import json
@@ -47,7 +48,7 @@ class UsageArchiveTests(unittest.TestCase):
         self.archive = usage_archive.UsageArchive(self.folder)
 
     def mutate_payload(self, fn, *, rehash=False):
-        with sqlite3.connect(self.archive.path) as connection:
+        with closing(sqlite3.connect(self.archive.path)) as connection, connection:
             payload = connection.execute("SELECT payload FROM snapshots WHERE thread_id='thread-test'").fetchone()[0]
             value = json.loads(payload)
             fn(value)
@@ -267,7 +268,7 @@ class UsageArchiveTests(unittest.TestCase):
 
     def test_malformed_json_and_unknown_database_are_safe_errors(self):
         self.archive.save("thread-test", fixture())
-        with sqlite3.connect(self.archive.path) as connection:
+        with closing(sqlite3.connect(self.archive.path)) as connection, connection:
             payload = b"private-invalid-json"
             connection.execute("UPDATE snapshots SET payload=?,content_hash=?", (payload, hashlib.sha256(payload).hexdigest()))
         with self.assertRaisesRegex(usage_archive.UsageArchiveError, "校验失败"):
@@ -294,7 +295,7 @@ class UsageArchiveTests(unittest.TestCase):
 
     def test_transaction_failure_leaves_prior_snapshot_and_surfaces_error(self):
         self.archive.save("thread-test", fixture())
-        with sqlite3.connect(self.archive.path) as connection:
+        with closing(sqlite3.connect(self.archive.path)) as connection, connection:
             connection.execute("CREATE TRIGGER reject_update BEFORE UPDATE ON snapshots BEGIN SELECT RAISE(ABORT, 'synthetic disk failure'); END")
         with self.assertRaisesRegex(usage_archive.UsageArchiveError, "无法读写"):
             self.archive.save("thread-test", fixture(amount=tokens(160, 40, 20, 10)))

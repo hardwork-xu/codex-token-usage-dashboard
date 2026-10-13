@@ -97,6 +97,26 @@ class IncrementalMeterTests(unittest.TestCase):
         self.assertEqual(state['turns'][-1]['threadId'], 'older-thread')
         self.assertEqual(sum(c['turnCount'] for c in state['conversations']), 251)
 
+    def test_concurrent_requests_share_one_scan_instead_of_queueing_retries(self):
+        entered, release = threading.Event(), threading.Event()
+        original = self.subject._snapshot
+        def slow_snapshot():
+            entered.set()
+            release.wait(timeout=2)
+            return original()
+        with mock.patch.object(self.subject, '_snapshot', side_effect=slow_snapshot) as scan:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                first=pool.submit(self.subject.snapshot)
+                self.assertTrue(entered.wait(timeout=1))
+                waiting=[pool.submit(self.subject.snapshot) for _ in range(5)]
+                time.sleep(0.03)
+                release.set()
+                states=[first.result()]+[f.result() for f in waiting]
+            self.assertEqual(scan.call_count,1)
+        self.assertTrue(all(s['turns'][0]['tokens']['total']==10 for s in states))
+        self.append([count(20)])
+        self.assertEqual(self.subject.snapshot()['turns'][0]['tokens']['total'],20)
+
     def test_snapshot_requests_serialize_reader_creation_and_advance(self):
         real = usage_log.UsageLogReader('synthetic-thread')
         active = threading.Lock()

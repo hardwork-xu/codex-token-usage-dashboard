@@ -750,7 +750,7 @@
     text('today-credit-billing','按今日用量片段分别计价。日期确认是用户设定，非自动检测；固定时区窗口可能跨越本地日期，实际速度来源见上方明细。');
   }
   function render() { syncHistorySettings(); const focusedModel = document.activeElement?.dataset?.modelDetails, list = turns(), collection = conversations(list); ensureConversationSelection(collection); const selectedTurns = historyTurns(selectedConversationId,list); renderMetricContext(); renderPeriods(); renderConversationPicker(collection); renderReadingNotice(collection); renderRunningConversations(list,collection); renderLatest(selectedTurns); renderOfficialUsage(); renderQuota(); renderChart(selectedTurns); renderHistory(historyTurns(historyScope(),list)); renderStatus(); restoreModelFocus(focusedModel); }
-  async function request(path, options = {}) { const controller = new AbortController(), timer = setTimeout(() => controller.abort(),8000); try { const response = await fetch(path,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}); let payload; try { payload = await response.json(); } catch { throw new Error('本地服务返回了无法读取的数据。'); } if (!response.ok) throw new Error(payload.error?.message || payload.error || payload.message || '请求未完成，请稍后重试。'); return payload; } finally { clearTimeout(timer); } }
+  async function request(path, options = {}) { const controller = new AbortController(), timer = setTimeout(() => controller.abort(),30000); try { const response = await fetch(path,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}); let payload; try { payload = await response.json(); } catch { throw new Error('本地服务返回了无法读取的数据。'); } if (!response.ok) throw new Error(payload.error?.message || payload.error || payload.message || '请求未完成，请稍后重试。'); return payload; } finally { clearTimeout(timer); } }
   async function fetchState(force = false) {
     if (document.hidden && !force) return; if (inflight) return statePromise; inflight = true;
     statePromise = (async () => {
@@ -887,7 +887,7 @@
   });
   document.addEventListener('visibilitychange',() => { if (!document.hidden) fetchState(); });
   setInterval(() => { if (!document.hidden) fetchState(); },3000);
-  fetchState();
+  fetchState(true);
   </script>
 </body>
 </html>

@@ -395,6 +395,9 @@ class Meter:
         self.reader_incomplete = {}
         self.reader_override_windows = None
         self.snapshot_lock = threading.Lock()
+        self.snapshot_generation = 0
+        self.last_snapshot = None
+        self.last_snapshot_inputs = None
         self.history_turns = []
         self.history_conversation_ids = set()
         self.quota = read_json(folder / "quota.json", {"updatedAt": None, "error": "尚未查询额度", "buckets": []})
@@ -679,8 +682,34 @@ class Meter:
     def snapshot(self):
         # A reader owns an incremental counter baseline; concurrent page/MCP
         # requests must not advance the same file twice.
+        generation = self.snapshot_generation
         with self.snapshot_lock:
-            return self._snapshot()
+            return self._snapshot_for_generation(generation)
+
+    def _snapshot_input_stamp(self):
+        result = []
+        for path in (self.folder / "settings.json", self.folder / "registry.json", self.archive.path):
+            try:
+                info = path.stat()
+                result.append((info.st_ino, info.st_size, info.st_mtime_ns))
+            except OSError:
+                result.append(None)
+        return tuple(result)
+
+    def _snapshot_for_generation(self, generation):
+        # Concurrent browser/history/skill requests share the scan that just
+        # completed. Otherwise timed-out clients queue full scans indefinitely.
+        inputs = self._snapshot_input_stamp()
+        if (generation != self.snapshot_generation and self.last_snapshot is not None
+                and inputs == self.last_snapshot_inputs):
+            return deepcopy(self.last_snapshot)
+        result = self._snapshot()
+        self.snapshot_generation += 1
+        self.last_snapshot = deepcopy(result)
+        # Saving usage changes the archive stamp; settings/registry changes
+        # during this scan must still force a subsequent waiting request to read.
+        self.last_snapshot_inputs = inputs[:2] + self._snapshot_input_stamp()[2:]
+        return result
 
     def history(self, thread_id=None, limit=100, cursor=None):
         """Page the full ledger, filtering BEFORE pagination.
@@ -708,8 +737,9 @@ class Meter:
                 before = tuple(key)
             except (ValueError, TypeError, KeyError, UnicodeError):
                 raise ValueError("历史分页位置无效，请重新加载") from None
+        generation = self.snapshot_generation
         with self.snapshot_lock:
-            self._snapshot()
+            self._snapshot_for_generation(generation)
             if thread_id is not None and thread_id not in self.history_conversation_ids:
                 raise ValueError("任务尚未登记")
             items = [turn for turn in self.history_turns if thread_id is None or turn["threadId"] == thread_id]
