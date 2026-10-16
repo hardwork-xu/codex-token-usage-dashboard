@@ -50,7 +50,7 @@
     <div class="intro"><div><p class="eyebrow">EVERY QUESTION, ACCOUNTED FOR</p><h1 id="page-heading">API 等价费用</h1><p id="intro-description" class="intro-description">假设已记录的模型用量改用 API，需要多少 Token 费用。</p></div><div class="tabs" role="tablist" aria-label="用量视图"><button id="overview-tab" type="button" role="tab" class="tab" aria-selected="true" aria-controls="overview-panel" tabindex="0">概览</button><button id="history-tab" type="button" role="tab" class="tab" aria-selected="false" aria-controls="history-panel" tabindex="-1">问题记录</button></div></div>
     <div id="connection-alert" class="connection-alert" role="status" hidden></div>
     <main>
-      <section class="estimate-intro" aria-labelledby="metric-mode"><div><p id="metric-mode" class="metric-mode">API Standard · 费用估算</p><p id="metric-assumptions" class="metric-assumptions">同模型与已记录 Token · 沿用已观察到的缓存命中比例 · 不含工具附加费和税费</p><p id="metric-boundary" class="metric-boundary">只覆盖已登记记录；不是订阅扣款或 API 账户余额。</p><p id="coverage-summary" class="coverage-summary" role="status">等待读取覆盖范围</p><p id="archive-summary" class="coverage-summary" role="status" hidden></p></div><div class="summary-currency"><div class="currency-switch"><span class="currency-switch-label">显示货币</span><div class="currency-buttons" role="group" aria-label="切换显示货币"><button type="button" class="currency-chip" data-currency-code="CNY" aria-pressed="false" disabled>人民币</button><button type="button" class="currency-chip" data-currency-code="USD" aria-pressed="true" disabled>美元</button><button type="button" class="currency-chip" data-currency-code="HKD" aria-pressed="false" disabled>港元</button></div></div><p id="fx-reference" class="fx-reference">参考汇率，可修改</p></div></section>
+      <section class="estimate-intro" aria-labelledby="metric-mode"><div><p id="metric-mode" class="metric-mode">API Standard · 费用估算</p><p id="metric-assumptions" class="metric-assumptions">同模型与已记录 Token · 沿用已观察到的缓存命中比例 · 不含工具附加费和税费</p><p id="metric-boundary" class="metric-boundary">只覆盖已登记记录；不是订阅扣款或 API 账户余额。</p><p id="coverage-summary" class="coverage-summary" role="status">等待读取覆盖范围</p><p id="collection-summary" class="coverage-summary" role="status" hidden></p><p id="archive-summary" class="coverage-summary" role="status" hidden></p></div><div class="summary-currency"><div class="currency-switch"><span class="currency-switch-label">显示货币</span><div class="currency-buttons" role="group" aria-label="切换显示货币"><button type="button" class="currency-chip" data-currency-code="CNY" aria-pressed="false" disabled>人民币</button><button type="button" class="currency-chip" data-currency-code="USD" aria-pressed="true" disabled>美元</button><button type="button" class="currency-chip" data-currency-code="HKD" aria-pressed="false" disabled>港元</button></div></div><p id="fx-reference" class="fx-reference">参考汇率，可修改</p></div></section>
       <section class="period-section" aria-labelledby="period-heading"><div class="period-header"><h2 id="period-heading">全部已登记任务的用量</h2><p class="period-scope">主任务和子任务各计一次 · 不受下方对话选择影响</p></div><div class="period-grid">
         <article class="card period-card" aria-labelledby="today-heading"><div class="card-top"><h3 id="today-heading">今天</h3><span id="today-badge" class="badge">等待汇总</span></div><p id="today-date" class="period-date">按用量事件的本地日期统计</p><div class="period-values"><div class="period-money-block"><p id="today-money-label" class="period-value-label">API 等价费用（估算）</p><p id="today-amount" class="period-money mono">—</p><p id="today-credits" class="period-credit mono"></p><p id="today-credit-note" class="credit-coverage"></p><p id="today-credit-billing" class="credit-billing"></p><p id="today-local-coverage" class="credit-coverage"></p><section id="today-official-observation" class="today-observation" aria-labelledby="today-observation-heading"><div class="card-top"><h4 id="today-observation-heading">官方余额观察净变化</h4><span id="today-observation-status" class="badge">未提供</span></div><p id="today-observation-change" class="observation-change mono">未提供</p><p id="today-observation-window" class="official-secondary"></p><p id="today-observation-balances" class="official-secondary mono"></p><p id="today-observation-note" class="official-secondary"></p><p class="official-secondary">只比较观察时段，不假定起点为午夜余额，不代表全天消费。充值、赠送、到期也会改变余额；周额度百分比不能与 Credits 相加。</p></section></div><div class="period-token-block"><p class="period-value-label">已记录 Tokens</p><p id="today-tokens" class="period-value mono">—</p></div></div><p id="today-pricing-summary" class="model-scope-note"></p><section class="period-models" aria-labelledby="today-models-heading"><div class="period-models-header"><h4 id="today-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="today-models" class="model-list" hidden></ul><p id="today-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="today-coverage" class="period-coverage"><p id="today-count">等待统计数据</p><p id="today-note" class="period-note"></p></div></article>
         <article class="card period-card" aria-labelledby="subscription-heading"><div class="card-top"><h3 id="subscription-heading">当前订阅周期</h3><span id="subscription-badge" class="badge">等待汇总</span></div><p id="subscription-date" class="period-date">按每月续订日划分</p><div class="period-values"><div class="period-money-block"><p id="subscription-money-label" class="period-value-label">API 等价费用（估算）</p><p id="subscription-amount" class="period-money mono">—</p><p id="subscription-credits" class="period-credit mono"></p><p id="subscription-credit-note" class="credit-coverage"></p></div><div class="period-token-block"><p class="period-value-label">已记录 Tokens</p><p id="subscription-tokens" class="period-value mono">—</p></div></div><p id="subscription-pricing-summary" class="model-scope-note"></p><section class="period-models" aria-labelledby="subscription-models-heading"><div class="period-models-header"><h4 id="subscription-models-heading">按模型</h4><span class="model-units">K = 千 · M = 百万</span></div><ul id="subscription-models" class="model-list" hidden></ul><p id="subscription-models-empty" class="model-empty">模型明细等待服务更新。</p></section><div id="subscription-coverage" class="period-coverage"><p id="subscription-count">等待统计数据</p><p id="subscription-note" class="period-note"></p><button id="configure-renewal" type="button" class="text-button period-action">设置每月续订日 ↗</button></div></article>
@@ -213,7 +213,7 @@
     if (!status.incomplete) return;
     text('reading-identity',(current?.title || '选定的对话') + (current?.displayId ? ' · ' + current.displayId : ''));
     text('reading-heading',status.error ? '历史记录暂时无法读取' : connected ? '正在补读历史记录' : '历史记录补读已暂停');
-    text('reading-note',status.error ? '这段对话的历史记录暂时无法读取，统计尚未补齐。面板会自动重试；若持续出现，请检查本地日志是否仍可访问。' : connected ? '大日志会分批读取；当前提问、Token 和金额仅含已读到的记录，尚未补齐。保持面板打开，进度会随刷新继续更新。' : '恢复与本地服务的连接后继续补读。当前提问、Token 和金额尚未补齐。');
+    text('reading-note',status.error ? '这段对话的历史记录暂时无法读取，统计尚未补齐。本地采集服务运行时会自动重试；若持续出现，请检查日志是否仍可访问。' : connected ? '大日志会分批读取；当前提问、Token 和金额仅含已读到的记录，尚未补齐。' + (state?.monitoring?.collection ? '后台采集运行时会继续补读，无需保持页面打开；当前运行状态见上方“后台采集”。' : '刷新后会继续读取；后台采集状态尚未提供。') : '页面与本地服务的连接已中断，后台采集状态尚未确认。当前提问、Token 和金额尚未补齐。');
     if (isArchived(current)) { text('reading-heading',archiveDescription(current)); text('reading-note','当前继续展示本机已保存的用量明细（' + archiveTimestamp(current) + '），不代表对话的最新状态。原日志恢复可读并核对后继续更新；此前从未读到的用量无法由已保存明细补出。'); }
     const reading = status.reading, progress = $('reading-progress'), measurable = !(isArchived(current) && (status.error || current.archive?.reason === 'source_unavailable')) && validNumber(reading?.bytesRead) && validNumber(reading?.fileBytes) && reading.fileBytes > 0;
     progress.hidden = !measurable;
@@ -724,6 +724,30 @@
     summary.classList.toggle('attention',!connected || !saved || archive.status !== 'ready' || archive.writeErrors > 0 || archive.retainedTasks > 0);
     summary.title = '仅保存用量计实际读到的数值片段、时间、模型和速度来源，不保存消息正文；未知信息仍保留未知。不是官方账本或完整日志备份，未读到的历史无法补造。';
   }
+  function renderCollectionSummary() {
+    const collection = state?.monitoring?.collection, summary = $('collection-summary'); summary.hidden = !collection;
+    if (!collection) { summary.textContent = ''; summary.title = ''; return; }
+    const now = Date.now() / 1000, age = now - collection.updatedAt;
+    const fresh = connected && validNumber(collection.updatedAt) && collection.updatedAt > 0 && age >= -5 && age <= 60;
+    const count = key => validNumber(collection[key]) && collection[key] >= 0 ? collection[key] : null;
+    const pending = count('pendingTasks'), unreadable = count('unreadableTasks'), writes = count('writeErrors'), registered = count('registeredTasks'), saved = count('savedTasks');
+    const errors = {registry_invalid:'任务登记记录无法读取',source_unavailable:'部分原日志暂不可读',source_changed:'原日志与已保存明细不一致，保留此前记录等待核对',archive_write_failed:'用量明细保存失败',collector_failed:'采集执行异常',status_write_failed:'采集状态保存失败'};
+    const labels = {ready:'后台采集已就绪',collecting:'后台正在采集',partial:'后台采集尚未补齐',error:'后台采集异常'};
+    const parts = [!fresh ? '后台采集状态尚未确认' : labels[collection.status] || '后台采集状态尚未确认'];
+    if (!connected) parts.push('页面连接已中断，以下为上次记录');
+    else if (!fresh) parts.push('运行状态未及时更新，以下为上次记录');
+    if (registered !== null) parts.push('已登记 ' + fmt(registered) + ' 个任务');
+    if (saved !== null) parts.push('已保存 ' + fmt(saved) + ' 个任务的已读明细');
+    if (pending > 0) parts.push(fmt(pending) + ' 个仍待补读');
+    if (unreadable > 0) parts.push(fmt(unreadable) + ' 个原日志不可读');
+    if (writes > 0) parts.push(fmt(writes) + ' 个保存异常，最新明细尚未确认');
+    if (collection.errorCode) parts.push(errors[collection.errorCode] || '采集异常待核对');
+    if (validNumber(collection.lastSavedAt) && collection.lastSavedAt > 0) parts.push('最近保存 ' + dateText(collection.lastSavedAt));
+    if (fresh && ['ready','collecting','partial'].includes(collection.status)) parts.push('关闭页面后仍可继续采集已登记日志');
+    summary.textContent = parts.join(' · ') + '。';
+    summary.classList.toggle('attention',!fresh || !['ready','collecting'].includes(collection.status) || pending > 0 || unreadable > 0 || writes > 0 || !!collection.errorCode);
+    summary.title = '后台采集独立于页面刷新；新任务需经 Codex 正常信任的 Hooks 登记并唤醒服务。按用量片段保存模型和已记录的 Standard/Fast，未知仍为未知。心跳新鲜只表示采集状态刚更新，不保证日志已全部读完或覆盖账户全部用量。停服务、未触发 Hooks 或未读前日志消失仍可能留下缺口。';
+  }
   function renderMetricContext() {
     text('page-heading',apiMode() ? 'API 等价费用' : officialMode() ? '本地 Credit 费用估算' : '自定义用量折算');
     text('intro-description',apiMode() ? '假设已记录的模型用量改用 API，需要多少 Token 费用。' : officialMode() ? '按购买 Credits 的费率与本地用量估算；不是官方用量记录或余额扣除。' : '按自己设置的统一单价换算已记录 Token。');
@@ -742,7 +766,7 @@
     if (discovery === 'partial' || discovery === 'unavailable') parts.push('子任务补查未完成，将自动重试');
     text('coverage-summary',parts.length ? parts.join(' · ') + (c.unreadableTasks > 0 || c.backfillingTasks > 0 ? '，汇总尚未补齐。' : '。仅代表已登记记录的覆盖情况。') : '记录覆盖范围尚未提供；金额仅表示已记录且可计价的用量。');
     $('coverage-summary').classList.toggle('attention',!parts.length || c.unreadableTasks > 0 || c.backfillingTasks > 0 || ['partial','unavailable'].includes(discovery));
-    renderArchiveSummary();
+    renderCollectionSummary(); renderArchiveSummary();
     const gaps = [];
     if (validNumber(c?.unreadableTasks) && c.unreadableTasks > 0) gaps.push(fmt(c.unreadableTasks) + ' 个登记任务的记录无法读取');
     if (validNumber(c?.backfillingTasks) && c.backfillingTasks > 0) gaps.push(fmt(c.backfillingTasks) + ' 个登记任务正在补读');

@@ -20,6 +20,8 @@ endpoint.json
 settings.json
 titles.json
 descendant-sync.json
+collection-status.json
+collection-wake-status.json
 usage-archive/
 *.sqlite3
 *.sqlite3-*

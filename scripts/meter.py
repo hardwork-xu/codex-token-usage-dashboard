@@ -45,6 +45,10 @@ DEFAULT_SETTINGS = {"currencyName": "美元", "currencySymbol": "$", "ratePerMil
                     "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None}
 QUOTA_STALE_SECONDS = 120
 QUOTA_REFRESH_COOLDOWN = 30
+COLLECTION_INTERVAL = 5
+COLLECTION_BATCH = 64
+COLLECTION_ACTIVE_GRACE = 3600
+COLLECTION_TAIL_GRACE = 60
 EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SubagentStop", "SubagentStart"}
 
 
@@ -88,7 +92,7 @@ def locked(folder, name="registry"):
         yield
 
 
-def register(folder, path, thread_id):
+def register(folder, path, thread_id, *, wake_collector=False):
     """Only the exact caller-provided log. No discovery or recursive scanning."""
     path = Path(path).expanduser().absolute()
     try:
@@ -112,6 +116,10 @@ def register(folder, path, thread_id):
         previous = previous if isinstance(previous, dict) else {}
         records[thread_id] = {**previous, "path": str(path), "registeredAt": previous.get("registeredAt", time.time())}
         write_json(folder / "registry.json", records)
+    # Wake after identity/registration is durable but before SQLite might wait
+    # for a writer. Interrupt Hooks have a shorter deadline than its busy wait.
+    if wake_collector:
+        wake_service_async(folder)
     # Hooks also preserve the numeric prefix they actually read, even when the
     # dashboard is closed. Large histories remain explicitly incomplete.
     UsageArchive(folder).save(thread_id, result)
@@ -192,7 +200,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.14.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.15.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -411,7 +419,9 @@ class Meter:
         self.official_usage_thread = None
         self.refresh_lock = threading.Lock()
         self.last_attempt = 0
-        self.last_client = time.time()
+        # A Hook can wake a headless collector. Only actual state requests
+        # should enable account/title refreshes.
+        self.last_client = 0
         self.csrf = secrets.token_urlsafe(32)
         self.titles = read_json(folder / "titles.json", {})
         if not isinstance(self.titles, dict):
@@ -426,6 +436,163 @@ class Meter:
         self.descendant_known_roots = {}
         self._load_descendant_progress()
         self.descendant_status = {"status": "waiting", "updatedAt": None}
+        self.collection_sources = {}
+        self.collection_cursor = 0
+        self.collection_busy_until = 0
+        self.collection_active_until = 0
+        self.collection_status = {"status": "collecting", "updatedAt": None,
+                                  "lastProgressAt": None, "lastSavedAt": None,
+                                  "registeredTasks": 0, "savedTasks": 0,
+                                  "pendingTasks": 0, "runningTasks": 0,
+                                  "unreadableTasks": 0, "writeErrors": 0, "errorCode": None}
+
+    def collection_busy(self):
+        """Bounded liveness lease; stale running turns never keep a worker forever."""
+        now = time.monotonic()
+        # Publish scalar deadlines only. HTTP service_actions must never iterate
+        # the mutable source map or wait on a long parsing/archive operation.
+        return now < max(self.collection_busy_until, self.collection_active_until)
+
+    def collect_usage(self):
+        """Save verified numeric usage without a browser, pricing or account calls.
+
+        Readers are shared with the UI under its existing lock. Each pass gives
+        pending sources equal bounded work, while already saved unchanged files
+        need only a stat. A failed save is never remembered as successful.
+        """
+        with self.snapshot_lock:
+            now, monotonic = time.time(), time.monotonic()
+            registry_path = self.folder / "registry.json"
+            records = read_json(registry_path, None)
+            if records is None and not registry_path.exists():
+                records = {}
+            if not isinstance(records, dict):
+                self.collection_status.update(status="error", updatedAt=now, errorCode="registry_invalid")
+                self._save_collection_status()
+                return deepcopy(self.collection_status)
+            windows = self.settings()["speedOverrideWindows"]
+            if windows != self.reader_override_windows:
+                self.cache.clear()
+                self.reader_incomplete.clear()
+                self.collection_sources.clear()
+                self.reader_override_windows = deepcopy(windows)
+            self.cache = {key: value for key, value in self.cache.items() if key in records}
+            self.reader_incomplete = {key: value for key, value in self.reader_incomplete.items() if key in records}
+            self.collection_sources = {key: value for key, value in self.collection_sources.items() if key in records}
+            candidates = []
+            for thread_id, record in records.items():
+                state = self.collection_sources.setdefault(thread_id, {})
+                try:
+                    path = Path(record["path"])
+                    info = path.lstat()
+                    stamp = (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                except (OSError, KeyError, TypeError, ValueError):
+                    state.update(unreadable=True, pending=False, running=False, activeUntil=0, saved=False)
+                    continue
+                if (state.get("saved") and state.get("stamp") == stamp
+                        and not state.get("pending")):
+                    continue
+                if state.get("stamp") != stamp or monotonic >= state.get("retryAt", 0):
+                    candidates.append((thread_id, path, stamp, info.st_mtime))
+            # A rotating cursor prevents a permanently huge or bad first file
+            # from starving later registrations.
+            if candidates:
+                start = self.collection_cursor % len(candidates)
+                candidates = candidates[start:] + candidates[:start]
+                self.collection_cursor = (start + min(COLLECTION_BATCH, len(candidates))) % len(candidates)
+            for thread_id, path, stamp, modified_at in candidates[:COLLECTION_BATCH]:
+                state = self.collection_sources[thread_id]
+                reader = self.cache.get(thread_id)
+                previous_stamp = state.get("stamp")
+                if (previous_stamp is not None and previous_stamp != stamp
+                        and previous_stamp[:-1] == stamp[:-1]):
+                    # A same-size rewrite can restore mtime. ctime still
+                    # changes; force fresh identity checks instead of letting
+                    # the incremental reader reuse its size/mtime fast path.
+                    reader = None
+                if reader is None:
+                    reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=windows)
+                read_succeeded = False
+                try:
+                    result = reader.read(path, time_budget=0.025)
+                    read_succeeded = True
+                    reading = result.get("reading", {})
+                    complete = reading.get("complete") is True
+                    previous_bytes = state.get("bytesRead", 0)
+                    progressed = reading.get("bytesRead", 0) > previous_bytes or state.get("stamp") != stamp
+                    unchanged_observation = (state.get("saved") and state.get("stamp") == stamp
+                                             and reading.get("bytesRead", 0) == previous_bytes
+                                             and state.get("pending") == (not complete))
+                    state.update(stamp=stamp, bytesRead=reading.get("bytesRead", 0),
+                                 pending=not complete, unreadable=False, retryAt=0,
+                                 running=any(turn.get("status") == "running" for turn in result.get("turns", [])),
+                                 activeUntil=0)
+                    self.reader_incomplete[thread_id] = not complete
+                    if progressed:
+                        self.collection_status["lastProgressAt"] = now
+                        self.collection_busy_until = max(self.collection_busy_until, monotonic + COLLECTION_TAIL_GRACE)
+                    if state["running"] and now - modified_at < COLLECTION_ACTIVE_GRACE:
+                        # Use actual file activity, not repeated observations of
+                        # an old running flag. Long silent turns get a one-hour
+                        # lease; the eventual Stop Hook wakes the worker again.
+                        remaining = COLLECTION_ACTIVE_GRACE - max(0, now - modified_at)
+                        state["activeUntil"] = monotonic + remaining
+                    if result.get("identityVerified") is True:
+                        if result.get("conversationMetadata", {}).get("sourceType") == "main":
+                            self.descendant_roots[thread_id] = modified_at
+                        if unchanged_observation:
+                            continue
+                        outcome = self.archive.save(thread_id, result)
+                        state.update(saved=True, writeError=False, retained=outcome.get("retained") is True)
+                        saved_at = outcome.get("savedAt")
+                        if saved_at is not None:
+                            self.collection_status["lastSavedAt"] = max(saved_at, self.collection_status["lastSavedAt"] or 0)
+                    else:
+                        state.update(saved=False, writeError=False)
+                except Exception:
+                    state["saved"] = False
+                    if reader.identity_rejected:
+                        self.descendant_roots.pop(thread_id, None)
+                        try:
+                            self.archive.invalidate(thread_id)
+                            state["writeError"] = False
+                        except Exception:
+                            state["writeError"] = True
+                        state.update(unreadable=True, pending=False, running=False, activeUntil=0,
+                                     stamp=stamp, retryAt=monotonic + 60)
+                    elif read_succeeded:
+                        # The verified read succeeded, but archiving failed.
+                        state.update(writeError=True, retryAt=0)
+                    else:
+                        state.update(unreadable=True, pending=False, running=False, activeUntil=0,
+                                     stamp=stamp, retryAt=monotonic + 60)
+            states = list(self.collection_sources.values())
+            self.collection_active_until = max((state.get("activeUntil", 0) for state in states), default=0)
+            pending = sum(bool(state.get("pending")) or not state for state in states)
+            unreadable = sum(bool(state.get("unreadable")) for state in states)
+            write_errors = sum(bool(state.get("writeError")) for state in states)
+            changed_sources = sum(bool(state.get("retained")) and not state.get("pending") for state in states)
+            self.collection_status.update(
+                status="error" if write_errors else "partial" if unreadable or changed_sources else "collecting" if pending else "ready",
+                updatedAt=now, registeredTasks=len(records), pendingTasks=pending,
+                runningTasks=sum(bool(state.get("running")) for state in states),
+                unreadableTasks=unreadable, writeErrors=write_errors,
+                errorCode="archive_write_failed" if write_errors else "source_unavailable" if unreadable else
+                          "source_changed" if changed_sources else None)
+            try:
+                self.collection_status["savedTasks"] = self.archive.stats()["savedThreads"]
+            except Exception:
+                self.collection_status.update(status="error", errorCode="archive_write_failed")
+            self._save_collection_status()
+            return deepcopy(self.collection_status)
+
+    def _save_collection_status(self):
+        # Only counters, timestamps and fixed codes; never include source paths,
+        # exception text, prompts or task titles in the operational status.
+        try:
+            write_json(self.folder / "collection-status.json", self.collection_status)
+        except Exception:
+            self.collection_status.update(status="error", errorCode="status_write_failed")
 
     def _load_descendant_progress(self):
         """Load only scheduling metadata, never treat cached roots as proof."""
@@ -773,6 +940,7 @@ class Meter:
             # attribution when edited; never reuse labels from an old window.
             self.cache.clear()
             self.reader_incomplete.clear()
+            self.collection_sources.clear()
             self.reader_override_windows = deepcopy(windows)
         readings, read_errors, successful_reads, metadata = {}, {}, 0, {}
         archives, archive_errors = {}, 0
@@ -888,6 +1056,7 @@ class Meter:
         quota_snapshot = deepcopy(self.quota)
         official_records = list(self.official_usage.items())
         return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
+                               "collection": deepcopy(self.collection_status),
                                "archive": {"status": "error" if archive_errors else "partial" if any(a["reason"] for a in archives.values()) else "ready",
                                            "savedTasks": len(archives), "retainedTasks": sum(a["source"] == "archive" for a in archives.values()),
                                            "writeErrors": archive_errors,
@@ -912,7 +1081,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.14.0"
+    server_version = "CodexUsageMeter/0.15.0"
 
     def log_message(self, *_):
         pass
@@ -970,7 +1139,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.14.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.15.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1048,8 +1217,11 @@ class MeterHTTPServer(ThreadingHTTPServer):
                 self.last_request_at = time.monotonic()
 
     def service_actions(self):
+        collecting = getattr(self, "meter", None)
+        busy = collecting.collection_busy() if collecting is not None else False
         with self.activity_lock:
             idle = (self.idle_timeout > 0 and not self.active_requests and
+                    not busy and
                     not self.idle_shutdown_started and
                     time.monotonic() - self.last_request_at >= self.idle_timeout)
             if idle:
@@ -1112,8 +1284,22 @@ def serve(folder, port=0, *, launchd_socket=None, idle_timeout=0):
                     if time.time() - meter.last_title_attempt >= 300:
                         meter.refresh_titles()
                     meter.refresh_descendants()
+                elif meter.collection_busy():
+                    # Metadata-only public ancestor queries stay scoped to
+                    # verified roots. Running children need not wait for Stop
+                    # or for a dashboard request before being registered.
+                    meter.refresh_descendants()
                 server.stop_event.wait(60)
         threading.Thread(target=refresh_loop, daemon=True).start()
+        def collection_loop():
+            while not server.stop_event.is_set():
+                try:
+                    meter.collect_usage()
+                except Exception:
+                    meter.collection_status.update(status="error", updatedAt=time.time(), errorCode="collector_failed")
+                    meter._save_collection_status()
+                server.stop_event.wait(COLLECTION_INTERVAL)
+        threading.Thread(target=collection_loop, daemon=True).start()
         print(json.dumps(endpoint), flush=True)
         try:
             server.serve_forever()
@@ -1215,12 +1401,13 @@ def ensure_service(folder):
         raise RuntimeError("本地按需入口未能唤醒服务，请检查服务安装状态" if mode else "本地面板未能启动")
 
 
-def handle_hook(folder, data):
+def handle_hook(folder, data, *, wake_collector=False):
     if not isinstance(data, dict) or data.get("hook_event_name") not in EVENTS:
-        return
+        return False
     # Prompt bodies, tool arguments and agent messages are deliberately ignored.
     path, thread_id = data.get("transcript_path"), data.get("session_id")
     candidates = [(path, thread_id)]
+    registered = False
     if data.get("hook_event_name") == "SubagentStop":
         child_path, child_id = data.get("agent_transcript_path"), data.get("agent_id")
         candidates.append((child_path, child_id))
@@ -1231,11 +1418,34 @@ def handle_hook(folder, data):
             # Subagent hooks can reference an unavailable parent transcript.
             # Validate each supplied identity independently so that one failure
             # does not discard the other task. Never infer an ID from a path.
-            register(folder, path, thread_id)
+            if wake_collector:
+                register(folder, path, thread_id, wake_collector=not registered)
+            else:
+                register(folder, path, thread_id)
+            registered = True
         except Exception:
             # Hooks are advisory and must not expose paths or interrupt Codex.
             # Each task still has to pass register's session identity checks.
-            continue
+            # A verified registration can survive a subsequent archive write
+            # failure. Wake the collector so the failed save gets retried.
+            records = read_json(folder / "registry.json", {})
+            prior = records.get(thread_id) if isinstance(records, dict) else None
+            if isinstance(prior, dict) and prior.get("path") == str(Path(path).expanduser().absolute()):
+                registered = True
+    return registered
+
+
+def wake_service_async(folder):
+    """Do not spend the Hook deadline waiting for a cold service startup."""
+    try:
+        subprocess.Popen([sys.executable, "-X", "utf8", str(Path(__file__).resolve()),
+                          "--data-dir", str(folder), "wake"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         **subprocess_options(background=True))
+    except (OSError, ValueError):
+        with contextlib.suppress(Exception):
+            write_json(folder / "collection-wake-status.json",
+                       {"updatedAt": time.time(), "status": "error", "errorCode": "wake_failed"})
 
 
 def mcp(folder):
@@ -1253,7 +1463,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.14.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.15.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
@@ -1295,6 +1505,7 @@ def main():
     sub.add_parser("open")
     sub.add_parser("mcp")
     sub.add_parser("hook")
+    sub.add_parser("wake")
     reg = sub.add_parser("register")
     reg.add_argument("--transcript", required=True)
     reg.add_argument("--thread-id", required=True)
@@ -1308,7 +1519,7 @@ def main():
         # A meter must never block, continue, or alter the agent's work.
         try:
             payload = sys.stdin.read(2_000_000)
-            handle_hook(folder, json.loads(payload))
+            handle_hook(folder, json.loads(payload), wake_collector=True)
         except Exception:
             pass
     elif args.command == "register":
@@ -1317,6 +1528,15 @@ def main():
         mcp(folder)
     elif args.command == "open":
         print(ensure_service(folder))
+    elif args.command == "wake":
+        try:
+            ensure_service(folder)
+            write_json(folder / "collection-wake-status.json",
+                       {"updatedAt": time.time(), "status": "ready", "errorCode": None})
+        except Exception:
+            with contextlib.suppress(Exception):
+                write_json(folder / "collection-wake-status.json",
+                           {"updatedAt": time.time(), "status": "error", "errorCode": "wake_failed"})
     elif args.command == "summary":
         state = local_get(ensure_service(folder) + "api/state")
         state.pop("csrfToken", None)

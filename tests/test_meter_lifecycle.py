@@ -206,7 +206,7 @@ class ActivationLifecycleTests(unittest.TestCase):
         server.serve_forever.assert_called_once()
         server.server_close.assert_called_once()
         self.assertTrue(server.stop_event.is_set())
-        background.return_value.start.assert_called_once()
+        self.assertEqual(background.return_value.start.call_count, 2)
         endpoint = meter.read_json(self.folder / "endpoint.json", {})
         self.assertEqual(endpoint["url"], self.url)
         self.assertEqual(endpoint["pid"], meter.os.getpid())
