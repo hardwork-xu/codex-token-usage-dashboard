@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -15,6 +16,41 @@ import run as entry
 import meter
 import browser_access
 import install
+
+
+def wait_for_owned_worker_exit(pid, timeout=10):
+    """Wait for a verified fixture worker, including its detached Windows process."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # ERROR_INVALID_PARAMETER: this PID already exited
+                return
+            raise ctypes.WinError(error)
+        try:
+            result = kernel.WaitForSingleObject(handle, int(timeout * 1000))
+            if result != 0:
+                raise AssertionError(f"fixture worker {pid} did not exit: wait result {result}")
+        finally:
+            kernel.CloseHandle(handle)
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"fixture worker {pid} did not exit")
 
 
 class MarketplaceEntryTests(unittest.TestCase):
@@ -45,6 +81,11 @@ class MarketplaceEntryTests(unittest.TestCase):
             base = Path(temporary)
             plugin = base / "Cache 插件 Space" / "codex-usage-meter"
             shutil.copytree(ROOT / "scripts", plugin / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
+            # Keep the real Hook, async wake, service and shutdown lifecycle.
+            # Only provider discovery is disabled inside this disposable copy,
+            # so even a slow CI worker or a state request cannot read an account.
+            with (plugin / "scripts/platform_support.py").open("a", encoding="utf-8") as stream:
+                stream.write('\n\ndef codex_command():\n    raise RuntimeError("synthetic marketplace fixture: account access disabled")\n')
             log = base / "synthetic.jsonl"
             log.write_text(json.dumps({"type": "session_meta", "payload": {"id": "synthetic-market-task"}}) + "\n", encoding="utf-8")
             folder, wrong = base / "meter-data", base / "host-data"
@@ -58,13 +99,39 @@ class MarketplaceEntryTests(unittest.TestCase):
                 command = [shell, "-NoProfile", "-NonInteractive", "-Command", handler["commandWindows"]]
             else:
                 command = ["/bin/sh", "-c", handler["command"]]
-            result = subprocess.run(command, input=json.dumps({"hook_event_name": "SessionStart", "session_id": "synthetic-market-task", "transcript_path": str(log)}).encode("utf-8"),
-                                    env=env, cwd=base, capture_output=True, timeout=20)
-            self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
-            self.assertEqual(result.stdout, b"")
-            registry = json.loads((folder / "registry.json").read_text(encoding="utf-8"))
-            self.assertEqual(set(registry), {"synthetic-market-task"})
-            self.assertFalse(wrong.exists())
+            try:
+                result = subprocess.run(command, input=json.dumps({"hook_event_name": "SessionStart", "session_id": "synthetic-market-task", "transcript_path": str(log)}).encode("utf-8"),
+                                        env=env, cwd=base, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+                self.assertEqual(result.stdout, b"")
+                registry = json.loads((folder / "registry.json").read_text(encoding="utf-8"))
+                self.assertEqual(set(registry), {"synthetic-market-task"})
+                self.assertFalse(wrong.exists())
+            finally:
+                # A Hook exits before its wake child. Deleting the fixture now
+                # races launch.lock on Windows and leaks a live worker elsewhere.
+                deadline = time.monotonic() + 20
+                wake = {}
+                while time.monotonic() < deadline:
+                    wake = meter.read_json(folder / "collection-wake-status.json", {})
+                    if wake:
+                        break
+                    time.sleep(0.05)
+                endpoint = meter.read_json(folder / "endpoint.json", {})
+                if endpoint:
+                    url = endpoint.get("url")
+                    self.assertTrue(meter.local_url(url))
+                    health = meter.local_get(url + "health")
+                    self.assertEqual(health.get("app"), "codex-usage-meter")
+                    self.assertEqual(health.get("pid"), endpoint.get("pid"))
+                    self.assertTrue(meter.stop_service(folder))
+                    wait_for_owned_worker_exit(health["pid"])
+                # Acquiring both normal locks verifies that the asynchronous
+                # launcher and service released their actual file handles.
+                for name in ("launch", "service"):
+                    with meter.locked(folder, name):
+                        pass
+                self.assertEqual(wake.get("status"), "ready", wake)
 
     def test_source_copy_excludes_checkout_data_and_marketplace(self):
         with tempfile.TemporaryDirectory() as temporary:
