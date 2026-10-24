@@ -110,7 +110,7 @@ def discover_descendants(records, root_id, codex_binary, *, cursor=None, archive
     try:
         with JsonRpcProcess([*prefix, "app-server", "--stdio"], timeout=timeout) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter_descendants", "version": "0.17.0"},
+                "clientInfo": {"name": "codex_usage_meter_descendants", "version": "0.17.1"},
                 "capabilities": {"experimentalApi": True}}})
             responses = rpc.responses()
 

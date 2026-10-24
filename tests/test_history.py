@@ -80,11 +80,63 @@ class HistoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.subject.history("older-task")
 
+    def test_explicit_overview_generation_reuses_all_history_pages_without_scan(self):
+        state = self.subject.snapshot()
+        generation = state["history"]["generation"]
+        self.assertGreater(generation, 0)
+        with mock.patch.object(self.subject, "_snapshot", side_effect=AssertionError("Must reuse overview")):
+            first = self.subject.history("older-task", limit=30, generation=generation)
+            second = self.subject.history("older-task", limit=30, cursor=first["nextCursor"], generation=generation)
+        self.assertEqual(first["generation"], generation)
+        self.assertEqual(second["generation"], generation)
+        rows = first["turns"] + second["turns"]
+        self.assertEqual(len(rows), 51)
+        self.assertEqual(sum(row["tokens"]["total"] for row in rows), 5100)
+
+    def test_collector_archive_progress_does_not_force_same_generation_reprice(self):
+        state = self.subject.snapshot()
+        generation = state["history"]["generation"]
+        inputs = list(self.subject._snapshot_input_stamp())
+        inputs[2] = (12345, 54321, 67890)
+        self.logs["older-task"].append(self.turn("older-task", 52, 52))
+        with mock.patch.object(self.subject, "_snapshot_input_stamp", return_value=tuple(inputs)), \
+                mock.patch.object(self.subject, "_snapshot", side_effect=AssertionError("Collector must not trigger scan")):
+            page = self.subject.history("older-task", generation=generation)
+        self.assertEqual(page["total"], 51)
+        next_state = self.subject.snapshot()
+        self.assertGreater(next_state["history"]["generation"], generation)
+        self.assertEqual(self.subject.history("older-task", generation=next_state["history"]["generation"])["total"], 52)
+
+    def test_same_generation_invalidates_on_settings_registry_or_gap_changes(self):
+        state = self.subject.snapshot()
+        generation = state["history"]["generation"]
+        before = self.subject.history("older-task", generation=generation)["turns"][0]["amount"]
+        meter.write_json(self.folder / "settings.json", {"pricingMode": "custom", "ratePerMillion": "2"})
+        page = self.subject.history("older-task", generation=generation)
+        self.assertGreater(page["generation"], generation)
+        self.assertEqual(meter.decimal.Decimal(page["turns"][0]["amount"]), 2 * meter.decimal.Decimal(before))
+        generation = page["generation"]
+        meter.write_json(self.folder / "historical-gaps.json", {"version": 1, "tasks": {}})
+        page = self.subject.history("older-task", generation=generation)
+        self.assertGreater(page["generation"], generation)
+        meter.write_json(self.folder / "registry.json", {})
+        with self.assertRaises(ValueError):
+            self.subject.history("older-task", generation=page["generation"])
+
+    def test_generation_without_a_matching_overview_falls_back_to_fresh_scan(self):
+        first = self.subject.history("older-task", generation=123)
+        self.assertEqual(first["total"], 51)
+        self.logs["older-task"].append(self.turn("older-task", 52, 52))
+        second = self.subject.history("older-task", generation=123)
+        self.assertEqual(second["total"], 52)
+        self.assertGreater(second["generation"], first["generation"])
+
     def test_bounded_validated_cursor_and_scope(self):
         first = self.subject.history("older-task", limit=1)
         for args in ({"limit": 0}, {"limit": 201}, {"limit": True}, {"thread_id": ""},
                      {"thread_id": "not-registered"}, {"cursor": "?"}, {"cursor": "x" * 1025},
-                     {"thread_id": "recent-task", "cursor": first["nextCursor"]}):
+                     {"thread_id": "recent-task", "cursor": first["nextCursor"]},
+                     *({"generation": invalid} for invalid in (0, -1, True, "1", 1.0, 2**53))):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 self.subject.history(**args)
         for payload in (None, [], {"version": 1, "key": [float("nan"), "a", "b"]},
@@ -117,6 +169,15 @@ class HistoryEndpointTests(unittest.TestCase):
                      "/api/history?threadId=a&limit=1&cursor=b&foo=1"):
             with self.subTest(path=path[:50]):
                 handler = self.get(path)
+                self.assertEqual(handler.respond.call_args.args[1], 400)
+                handler.server.meter.history.assert_not_called()
+
+    def test_generation_query_is_validated_and_forwarded(self):
+        handler = self.get("/api/history?threadId=fixture&limit=3&cursor=opaque&generation=12")
+        handler.server.meter.history.assert_called_once_with("fixture", 3, "opaque", generation=12)
+        for value in ("", "-1", "0", "1.0", "true", "1&generation=2", str(2**53), "9" * 40):
+            with self.subTest(value=value):
+                handler = self.get("/api/history?generation=" + value)
                 self.assertEqual(handler.respond.call_args.args[1], 400)
                 handler.server.meter.history.assert_not_called()
 

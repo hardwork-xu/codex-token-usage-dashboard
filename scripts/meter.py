@@ -8,6 +8,7 @@ import contextlib
 from copy import deepcopy
 from datetime import date
 import decimal
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -53,7 +54,7 @@ QUOTA_REFRESH_COOLDOWN = 30
 COLLECTION_INTERVAL = 5
 COLLECTION_BATCH = 64
 COLLECTION_PARSE_SECONDS = 1.0
-COLLECTION_SOURCE_SECONDS = 0.5
+COLLECTION_SOURCE_SECONDS = 1.0
 COLLECTION_ACTIVE_GRACE = 3600
 COLLECTION_TAIL_GRACE = 60
 COMPRESSED_READY_BYTES = 256 * 1024 * 1024
@@ -94,6 +95,37 @@ def source_error_code(exc):
             and isinstance(exc.__context__, FileNotFoundError)):
         return "source_missing"
     return exc.code if isinstance(exc, CompressedSourceError) else "source_unreadable"
+
+
+@lru_cache(maxsize=1)
+def _windows_change_query():
+    """Bind the native metadata timestamp, independent of CPython stat semantics."""
+    import ctypes
+
+    class FileBasicInfo(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_int64) for name in
+                    ("CreationTime", "LastAccessTime", "LastWriteTime", "ChangeTime")] + [
+                        ("FileAttributes", ctypes.c_uint32)]
+
+    query = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandleEx
+    query.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    query.restype = ctypes.c_int32
+    return query, FileBasicInfo
+
+
+def _file_change_ns(descriptor, details=None):
+    if not is_windows():
+        return (details if details is not None else os.fstat(descriptor)).st_ctime_ns
+    import ctypes
+    import msvcrt
+
+    query, info_type = _windows_change_query()
+    info = info_type()
+    # FileBasicInfo = 0. Windows FILETIME is measured in 100 ns since 1601.
+    # Python 3.10 may expose creation time through both stat and fstat instead.
+    if not query(msvcrt.get_osfhandle(descriptor), 0, ctypes.byref(info), ctypes.sizeof(info)):
+        raise OSError("Cannot read file metadata change time")
+    return (info.ChangeTime - 116444736000000000) * 100
 
 
 def write_json(path, value):
@@ -232,7 +264,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.17.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.17.1"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -505,11 +537,15 @@ class Meter:
             return stamp, Path(str(path) + ".zst").stat().st_mtime
         info = path.lstat()
         handle_change = None
-        # Windows path ctime may be creation time. Do not skip a same-size
-        # overwrite merely because its original mtime was restored.
-        with contextlib.suppress(OSError, CompressedSourceError):
+        # Windows stat and (on older Python) fstat may expose creation time.
+        # Query native ChangeTime; a failed query must not enable reuse.
+        if is_windows():
             with _open_regular(path) as stream:
-                handle_change = os.fstat(stream.fileno()).st_ctime_ns
+                handle_change = _file_change_ns(stream.fileno())
+        else:
+            with contextlib.suppress(OSError, CompressedSourceError):
+                with _open_regular(path) as stream:
+                    handle_change = _file_change_ns(stream.fileno())
         return (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
                 info.st_ctime_ns, handle_change), info.st_mtime
 
@@ -569,8 +605,8 @@ class Meter:
         """Bind a normal source to its identity, stat and bounded byte anchors.
 
         No raw source content or path is persisted. The open-file change time
-        is kept separately: Windows 3.12+ may expose creation time through
-        lstat but metadata-change time through fstat. Append and any observed
+        is kept separately: Windows stat/fstat creation-time semantics vary
+        by Python version, so native ChangeTime is used. Append and any observed
         rewrite invalidate reuse and return to the original incremental reader.
         """
         if path.suffix.lower() != ".jsonl":
@@ -578,7 +614,8 @@ class Meter:
         try:
             with _open_regular(path) as stream:
                 before = os.fstat(stream.fileno())
-                metadata = {**_stamp(before), "handleChangeNs": before.st_ctime_ns,
+                change_before = _file_change_ns(stream.fileno(), before)
+                metadata = {**_stamp(before), "handleChangeNs": change_before,
                             "pathHash": hashlib.sha256(os.path.normcase(str(path.absolute())).encode()).hexdigest()}
                 cached = self.source_stamp_cache.get(thread_id)
                 if cached is not None and all(cached.get(key) == value for key, value in metadata.items()):
@@ -600,7 +637,7 @@ class Meter:
                 after = os.fstat(stream.fileno())
                 current = path.lstat()
                 if (_stamp(before) != _stamp(after) or _stamp(before) != _stamp(current)
-                        or before.st_ctime_ns != after.st_ctime_ns):
+                        or change_before != _file_change_ns(stream.fileno(), after)):
                     return None
                 stamp = {**metadata, "headerHash": hashlib.sha256(first).hexdigest(),
                          "tailHash": hashlib.sha256(tail).hexdigest()}
@@ -611,6 +648,9 @@ class Meter:
                 raise
             return None
         except (OSError, TypeError, ValueError):
+            # Without a reliable timestamp, a previously caught-up reader must
+            # not hide a same-size rewrite through its size/mtime fast path.
+            self.cache.pop(thread_id, None)
             return None
 
     def _remember_plain_source(self, thread_id, path, result, outcome):
@@ -1247,13 +1287,14 @@ class Meter:
             return deepcopy(self.last_snapshot)
         result = self._snapshot()
         self.snapshot_generation += 1
+        result["history"]["generation"] = self.snapshot_generation
         self.last_snapshot = deepcopy(result)
         # Saving usage changes the archive stamp; settings/registry changes
         # during this scan must still force a subsequent waiting request to read.
         self.last_snapshot_inputs = inputs[:2] + self._snapshot_input_stamp()[2:]
         return result
 
-    def history(self, thread_id=None, limit=100, cursor=None):
+    def history(self, thread_id=None, limit=100, cursor=None, *, generation=None):
         """Page the full ledger, filtering BEFORE pagination.
 
         A stable key cursor prevents new questions inserted at the front from
@@ -1262,6 +1303,8 @@ class Meter:
         """
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("每页记录数应在 1 到 200 之间")
+        if generation is not None and (type(generation) is not int or not 1 <= generation <= 2**53 - 1):
+            raise ValueError("历史快照编号无效")
         if thread_id is not None and (not isinstance(thread_id, str) or not 1 <= len(thread_id) <= 128):
             raise ValueError("任务标识无效")
         before = None
@@ -1279,9 +1322,21 @@ class Meter:
                 before = tuple(key)
             except (ValueError, TypeError, KeyError, UnicodeError):
                 raise ValueError("历史分页位置无效，请重新加载") from None
-        generation = self.snapshot_generation
+        observed_generation = self.snapshot_generation
         with self.snapshot_lock:
-            self._snapshot_for_generation(generation)
+            inputs = self._snapshot_input_stamp()
+            # A page explicitly tied to the last overview uses that same
+            # priced ledger, even while the collector saves newer progress.
+            # Repricing every history page can otherwise keep the collector
+            # waiting behind consecutive full-account scans. Local settings,
+            # registration and gap acknowledgement changes still invalidate it.
+            reuse = (generation == self.snapshot_generation and self.last_snapshot is not None
+                     and self.last_snapshot_inputs is not None
+                     and inputs[:2] + inputs[3:] == self.last_snapshot_inputs[:2] + self.last_snapshot_inputs[3:])
+            if not reuse:
+                self._snapshot_for_generation(observed_generation)
+            else:
+                self.last_client = time.time()
             if thread_id is not None and thread_id not in self.history_conversation_ids:
                 raise ValueError("任务尚未登记")
             items = [turn for turn in self.history_turns if thread_id is None or turn["threadId"] == thread_id]
@@ -1295,7 +1350,8 @@ class Meter:
             if len(items) > limit:
                 payload = {"version": 1, "threadId": thread_id, "key": key_of(page[-1])}
                 next_cursor = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode("ascii")
-            return {"turns": page, "total": total, "nextCursor": next_cursor}
+            return {"turns": page, "total": total, "nextCursor": next_cursor,
+                    "generation": self.snapshot_generation}
 
     def _snapshot(self):
         self.last_client = time.time()
@@ -1490,7 +1546,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.17.0"
+    server_version = "CodexUsageMeter/0.17.1"
 
     def log_message(self, *_):
         pass
@@ -1528,14 +1584,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if len(self.path) > 2048:
                     raise ValueError("请求过长")
-                query = parse.parse_qs(parse.urlsplit(self.path).query, keep_blank_values=True, max_num_fields=3)
-                if set(query) - {"threadId", "limit", "cursor"} or any(len(values) != 1 for values in query.values()):
+                query = parse.parse_qs(parse.urlsplit(self.path).query, keep_blank_values=True, max_num_fields=4)
+                if set(query) - {"threadId", "limit", "cursor", "generation"} or any(len(values) != 1 for values in query.values()):
                     raise ValueError("历史查询字段无效")
                 limit = query.get("limit", ["100"])[0]
                 if not limit.isascii() or not limit.isdigit():
                     raise ValueError("每页记录数无效")
+                options = {}
+                if "generation" in query:
+                    generation = query["generation"][0]
+                    if not generation.isascii() or not generation.isdigit() or not 1 <= len(generation) <= 16:
+                        raise ValueError("历史快照编号无效")
+                    options["generation"] = int(generation)
+                    if not 1 <= options["generation"] <= 2**53 - 1:
+                        raise ValueError("历史快照编号无效")
                 return self.respond(self.server.meter.history(query.get("threadId", [None])[0],
-                    int(limit), query.get("cursor", [None])[0]))
+                    int(limit), query.get("cursor", [None])[0], **options))
             except ValueError as exc:
                 return self.respond({"error": str(exc)}, 400)
         if self.path == "/":
@@ -1548,7 +1612,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.17.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.17.1", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1874,7 +1938,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.17.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.17.1"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

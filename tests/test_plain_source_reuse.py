@@ -13,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import meter
+import compressed_sources
 import usage_log
 from test_headless_collection import THREAD, records, usage, context, event
 
@@ -221,8 +222,11 @@ class PlainSourceReuseTests(unittest.TestCase):
         common = dict(st_dev=1, st_ino=2, st_size=len(raw), st_mtime_ns=3, st_birthtime_ns=4)
         path_info = SimpleNamespace(**common, st_ctime_ns=4)
         def read_stamp(change):
-            handle = SimpleNamespace(**common, st_ctime_ns=change)
-            with mock.patch("compressed_sources.sys.platform", "win32"), \
+            # Python 3.10 can report creation time from both stat and fstat.
+            handle = SimpleNamespace(**common, st_ctime_ns=4)
+            with mock.patch.object(compressed_sources, "sys", SimpleNamespace(platform="win32")), \
+                    mock.patch.object(meter, "is_windows", return_value=True), \
+                    mock.patch.object(meter, "_file_change_ns", return_value=change), \
                     mock.patch.object(meter, "_open_regular", return_value=Stream(raw)), \
                     mock.patch.object(meter.os, "fstat", return_value=handle), \
                     mock.patch.object(Path, "lstat", return_value=path_info):
@@ -231,6 +235,66 @@ class PlainSourceReuseTests(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertEqual(first["ctimeNs"], changed["ctimeNs"])
         self.assertNotEqual(first["handleChangeNs"], changed["handleChangeNs"])
+
+    def test_native_change_time_detects_rewrite_when_all_python_stats_are_unchanged(self):
+        raw = self.path.read_bytes()
+        altered = raw.replace(THREAD.encode(), b"foreign--synthetic")
+        self.assertEqual(len(raw), len(altered))
+
+        class Stream(io.BytesIO):
+            def fileno(self):
+                return 42
+
+        info = SimpleNamespace(st_dev=1, st_ino=2, st_size=len(raw), st_mtime_ns=3,
+                               st_mtime=3e-9, st_birthtime_ns=4, st_ctime_ns=4)
+        with mock.patch.object(compressed_sources, "sys", SimpleNamespace(platform="win32")), \
+                mock.patch.object(meter, "is_windows", return_value=True), \
+                mock.patch.object(meter.os, "fstat", return_value=info), \
+                mock.patch.object(Path, "lstat", return_value=info), \
+                mock.patch.object(self.subject.compressed_cache, "inspect", return_value=None):
+            with mock.patch.object(meter, "_file_change_ns", return_value=5), \
+                    mock.patch.object(meter, "_open_regular", side_effect=lambda _: Stream(raw)):
+                before = self.subject._source_info(THREAD, self.path)[0]
+                self.assertIsNotNone(self.subject._plain_source_stamp(THREAD, self.path))
+            with mock.patch.object(meter, "_file_change_ns", return_value=6), \
+                    mock.patch.object(meter, "_open_regular", side_effect=lambda _: Stream(altered)):
+                changed = self.subject._source_info(THREAD, self.path)[0]
+                self.assertEqual(before[:-1], changed[:-1])
+                self.assertNotEqual(before[-1], changed[-1])
+                with self.assertRaises(compressed_sources.CompressedSourceError) as rejected:
+                    self.subject._plain_source_stamp(THREAD, self.path)
+                self.assertEqual(rejected.exception.code, "identity_mismatch")
+
+    def test_unavailable_native_change_time_cannot_enable_reuse(self):
+        self.subject.cache[THREAD] = object()
+        with mock.patch.object(meter, "is_windows", return_value=True), \
+                mock.patch.object(meter, "_file_change_ns", side_effect=OSError("synthetic unavailable")):
+            with self.assertRaises(OSError):
+                self.subject._source_info(THREAD, self.path)
+            self.assertIsNone(self.subject._plain_source_stamp(THREAD, self.path))
+        self.assertNotIn(THREAD, self.subject.cache)
+
+    def test_windows_native_query_uses_change_time_not_creation_time(self):
+        import ctypes
+
+        def fill(handle, kind, buffer, size):
+            self.assertEqual((handle, kind, size), (123, 0, 40))
+            buffer._obj.CreationTime = 116444736000000001
+            buffer._obj.ChangeTime = 116444736012345678
+            return 1
+
+        query = mock.Mock(side_effect=fill)
+        meter._windows_change_query.cache_clear()
+        self.addCleanup(meter._windows_change_query.cache_clear)
+        with mock.patch.object(meter, "is_windows", return_value=True), \
+                mock.patch.object(ctypes, "WinDLL", create=True,
+                                  return_value=SimpleNamespace(GetFileInformationByHandleEx=query)), \
+                mock.patch.dict(sys.modules, {"msvcrt": SimpleNamespace(get_osfhandle=lambda descriptor: 123)}):
+            self.assertEqual(meter._file_change_ns(42), 1234567800)
+            query.side_effect = None
+            query.return_value = 0
+            with self.assertRaises(OSError):
+                meter._file_change_ns(42)
 
 
 if __name__ == "__main__":

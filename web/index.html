@@ -104,6 +104,7 @@
   const $ = id => document.getElementById(id);
   const numberFormat = new Intl.NumberFormat('zh-CN');
   let state = null, inflight = false, connected = false, lastFetchedAt = null, toastTimer = null, currencySaving = false, statePromise = null, selectedConversationId = null, selectionInitialized = false, historyAll = false, selectedConversationSnapshot = null, aliasThreadId = null, activeView = 'overview';
+  let automaticRefreshNotBefore = 0;
   const selectionStorageKey = 'codex-usage-meter.selected-conversation';
   let preferredConversationId = null; try { preferredConversationId = localStorage.getItem(selectionStorageKey); } catch {}
   let quotaRefreshRequested = false, quotaRefreshError = null, quotaRefreshRetryAt = 0;
@@ -151,12 +152,14 @@
     entry.loading = true; entry.error = ''; entry.retryMore = more; render();
     try {
       let cursor = append ? entry.nextCursor : null, rows = append ? [...entry.rows] : [], total = 0, nextCursor = null;
+      let generation = Number.isInteger(state?.history?.generation) && state.history.generation > 0 ? state.history.generation : null;
       const seenCursors = new Set();
       do {
-        const query = 'limit=' + historyPageSize + (key ? '&threadId=' + encodeURIComponent(key) : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        const query = 'limit=' + historyPageSize + (key ? '&threadId=' + encodeURIComponent(key) : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') + (generation !== null ? '&generation=' + generation : '');
         const result = await request('/api/history?' + query);
         if (!current() || activeHistoryKey() !== key) return;
         if (!result || !Array.isArray(result.turns) || !Number.isInteger(result.total) || result.total < 0 || !(result.nextCursor === null || typeof result.nextCursor === 'string' && result.nextCursor) || result.turns.some(turn => !turn || typeof turn.id !== 'string' || typeof turn.threadId !== 'string' || key && turn.threadId !== key)) throw new Error('历史记录响应无效，请重试。');
+        if (Number.isInteger(result.generation) && result.generation > 0) generation = result.generation;
         rows = mergeHistoryTurns([...rows,...result.turns]); total = result.total; nextCursor = result.nextCursor;
         if (!append && entry.ready && total < entry.total) fullRead = true;
         if (nextCursor && (seenCursors.has(nextCursor) || nextCursor === cursor || !result.turns.length)) throw new Error('历史分页未能继续，请重试。');
@@ -830,11 +833,18 @@
   function render() { syncHistorySettings(); const focusedModel = document.activeElement?.dataset?.modelDetails, list = turns(), collection = conversations(list); ensureConversationSelection(collection); const selectedTurns = historyTurns(selectedConversationId,list); renderMetricContext(); renderPeriods(); renderConversationPicker(collection); renderConversationCoverage(collection); renderReadingNotice(collection); renderRunningConversations(list,collection); renderLatest(selectedTurns); renderOfficialUsage(); renderQuota(); renderChart(selectedTurns); renderHistory(historyTurns(historyScope(),list)); renderStatus(); restoreModelFocus(focusedModel); }
   async function request(path, options = {}) { const controller = new AbortController(), timer = setTimeout(() => controller.abort(),30000); try { const response = await fetch(path,{...options,cache:'no-store',credentials:'same-origin',signal:controller.signal}); let payload; try { payload = await response.json(); } catch { throw new Error('本地服务返回了无法读取的数据。'); } if (!response.ok) throw new Error(payload.error?.message || payload.error || payload.message || '请求未完成，请稍后重试。'); return payload; } finally { clearTimeout(timer); } }
   async function fetchState(force = false) {
-    if (document.hidden && !force) return; if (inflight) return statePromise; inflight = true;
+    if (document.hidden && !force) return; if (inflight) return statePromise;
+    if (!force && Date.now() < automaticRefreshNotBefore) return;
+    inflight = true; const startedAt = Date.now();
     statePromise = (async () => {
       try { const next = await request('/api/state'); if (!next || typeof next !== 'object' || !next.monitoring) throw new Error('本地服务未提供有效的用量状态。'); state = next; connected = true; lastFetchedAt = Date.now() / 1000; $('connection-alert').hidden = true; render(); refreshHistory(); }
       catch (error) { connected = false; text('connection-alert',state ? '与本地统计服务的连接已中断。以下保留上次收到的数据，恢复连接后自动更新。' : '暂时无法连接本地统计服务。请确认服务已启动；面板会自动重试。'); $('connection-alert').hidden = false; renderStatus(); renderPeriods(); renderMetricContext(); renderCurrencyButtons(); renderConversationPicker(conversations()); renderConversationCoverage(conversations()); renderReadingNotice(conversations()); renderOfficialUsage(); renderQuota(); renderHistory(historyTurns(historyScope())); }
-      finally { inflight = false; }
+      finally {
+        const finishedAt = Date.now(), elapsed = Math.max(0,finishedAt - startedAt), monitoring = state?.monitoring;
+        const pending = monitoring?.collection?.pendingTasks > 0 || (monitoring?.coverage?.activeBackfillingTasks ?? monitoring?.coverage?.backfillingTasks) > 0;
+        automaticRefreshNotBefore = finishedAt + Math.max(pending ? 10000 : 0,elapsed >= 3000 ? elapsed : 0);
+        inflight = false;
+      }
     })();
     return statePromise;
   }

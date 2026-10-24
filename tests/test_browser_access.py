@@ -151,7 +151,7 @@ class BrowserAccessTests(unittest.TestCase):
         self.assertEqual((self.runtime / "scripts/compressed_sources.py").read_bytes(),
                          (self.source / "scripts/compressed_sources.py").read_bytes())
         self.assertEqual(self.endpoint.read_bytes(), endpoint)
-        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.17.0")
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.17.1")
 
     def test_historical_gap_modules_upgrade_from_owned_016_runtime(self):
         self.seed_installed()
