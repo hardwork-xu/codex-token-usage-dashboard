@@ -43,8 +43,14 @@ def _regular(info):
 
 
 def _stamp(info):
+    # Windows Python 3.12+ can report creation time through lstat().st_ctime
+    # but metadata-change time through fstat().st_ctime (CPython #157671).
+    # Both APIs expose the same birth time. Keep the historical path-stamp
+    # meaning on Windows while retaining change time on POSIX.
+    ctime_ns = (getattr(info, "st_birthtime_ns", info.st_ctime_ns)
+                if sys.platform == "win32" else info.st_ctime_ns)
     return {"device": info.st_dev, "inode": info.st_ino, "size": info.st_size,
-            "mtimeNs": info.st_mtime_ns, "ctimeNs": info.st_ctime_ns}
+            "mtimeNs": info.st_mtime_ns, "ctimeNs": ctime_ns}
 
 
 def _safe_ancestors(path):

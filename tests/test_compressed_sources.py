@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import compressed_sources as cs
@@ -77,6 +78,44 @@ class CompressedSourcesTests(unittest.TestCase):
         self.assertFalse(Path(result["path"]).exists())
         self.assertTrue(Path(other["path"]).exists())
         self.assertEqual(self.compressed.read_bytes(), body())
+
+    def test_windows_different_path_and_descriptor_ctimes_allow_decode_and_cache_reuse(self):
+        self.write()
+        native_lstat, native_fstat = Path.lstat, os.fstat
+
+        def windows_info(info, *, descriptor=False):
+            values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            birthtime = getattr(info, "st_birthtime_ns", info.st_ctime_ns)
+            values.update(st_birthtime_ns=birthtime,
+                          st_ctime_ns=birthtime + (1_000_000 if descriptor else 0))
+            return SimpleNamespace(**values)
+
+        with mock.patch.object(cs, "sys", SimpleNamespace(platform="win32", executable=sys.executable)), \
+                mock.patch.object(Path, "lstat", lambda path: windows_info(native_lstat(path))), \
+                mock.patch.object(cs.os, "fstat", lambda fd: windows_info(native_fstat(fd), descriptor=True)):
+            first = self.cache.resolve(THREAD, self.original)
+            self.assertEqual(Path(first["path"]).read_bytes(), body())
+            with mock.patch.object(cs, "_decode", side_effect=AssertionError("must reuse")):
+                self.assertTrue(self.cache.resolve(THREAD, self.original)["reused"])
+            self.cache.release(THREAD, self.original, first["sourceStamp"])
+        self.assertFalse(Path(first["path"]).exists())
+
+    def test_timestamp_normalization_preserves_identity_size_and_modification_checks(self):
+        values = {"st_dev": 1, "st_ino": 2, "st_size": 3,
+                  "st_mtime_ns": 4, "st_ctime_ns": 5, "st_birthtime_ns": 6}
+        original = SimpleNamespace(**values)
+        changed_ctime = SimpleNamespace(**{**values, "st_ctime_ns": 99})
+        with mock.patch.object(cs.sys, "platform", "win32"):
+            self.assertEqual(cs._stamp(original), cs._stamp(changed_ctime))
+            for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_birthtime_ns"):
+                with self.subTest(field=field):
+                    changed = SimpleNamespace(**{**values, field: 100})
+                    self.assertNotEqual(cs._stamp(original), cs._stamp(changed))
+            older_python = SimpleNamespace(**{key: value for key, value in values.items()
+                                               if key != "st_birthtime_ns"})
+            self.assertEqual(cs._stamp(older_python)["ctimeNs"], values["st_ctime_ns"])
+        with mock.patch.object(cs.sys, "platform", "darwin"):
+            self.assertNotEqual(cs._stamp(original), cs._stamp(changed_ctime))
 
     def test_source_replacement_invalidates_cached_bytes(self):
         self.write()
