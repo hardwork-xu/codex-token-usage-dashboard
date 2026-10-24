@@ -151,7 +151,7 @@ class BrowserAccessTests(unittest.TestCase):
         self.assertEqual((self.runtime / "scripts/compressed_sources.py").read_bytes(),
                          (self.source / "scripts/compressed_sources.py").read_bytes())
         self.assertEqual(self.endpoint.read_bytes(), endpoint)
-        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.17.1")
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.18.0")
 
     def test_historical_gap_modules_upgrade_from_owned_016_runtime(self):
         self.seed_installed()
@@ -167,6 +167,26 @@ class BrowserAccessTests(unittest.TestCase):
         for name in names:
             self.assertEqual((self.runtime / name).read_bytes(), (self.source / name).read_bytes())
         self.assertEqual(self.endpoint.read_bytes(), endpoint)
+
+    def test_device_allocation_upgrade_from_owned_017_runtime(self):
+        self.seed_installed()
+        manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["version"] = "0.17.1"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        (self.runtime / "scripts/device_allocation.py").unlink()
+        endpoint = self.endpoint.read_bytes()
+        self.assertEqual(access.install(self.folder)["port"], 51234)
+        self.assertEqual((self.runtime / "scripts/device_allocation.py").read_bytes(),
+                         (self.source / "scripts/device_allocation.py").read_bytes())
+        self.assertEqual(self.endpoint.read_bytes(), endpoint)
+
+    def test_current_runtime_missing_device_allocation_is_rejected(self):
+        self.seed_installed()
+        (self.runtime / "scripts/device_allocation.py").unlink()
+        with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
+            access.install(self.folder)
+        self.assertEqual(self.events, [])
 
     def test_current_runtime_missing_historical_gap_module_is_rejected(self):
         self.seed_installed()

@@ -6,7 +6,7 @@ import argparse
 import base64
 import contextlib
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime
 import decimal
 from functools import lru_cache
 import hashlib
@@ -29,6 +29,7 @@ from usage_log import read_usage_log, UsageLogReader, UsageLogError, reproject_u
 from usage_archive import UsageArchive
 from historical_gaps import HistoricalGaps, HistoricalGapError
 from historical_gap_view import decorate_collection, decorate_snapshot
+from device_allocation import build_allocation, validate_allocation, MAX_ALLOCATION_BYTES
 from compressed_sources import (CompressedSourceCache, CompressedSourceError,
                                 _open_regular, _stamp, MAX_HEADER_BYTES)
 from pricing import estimate_turn
@@ -264,7 +265,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.17.1"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.18.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -986,6 +987,44 @@ class Meter:
                     "acknowledgedTasks": None, "savedTasks": None, "unknownCostTasks": None,
                     "unreadableTasks": None, "updatedAt": None}
 
+    def device_allocation_view(self):
+        """A frozen, numeric-only classification; never a second usage ledger."""
+        try:
+            path = self.folder.resolve() / "device-allocation.json"
+            path.lstat()  # Distinguish an absent snapshot before the safe-open wrapper.
+            with _open_regular(path) as stream:
+                raw = stream.read(MAX_ALLOCATION_BYTES + 1)
+            if len(raw) > MAX_ALLOCATION_BYTES:
+                raise ValueError()
+            return validate_allocation(json.loads(raw)), None
+        except FileNotFoundError:
+            return None, None
+        except (OSError, ValueError, TypeError, RecursionError, CompressedSourceError):
+            return None, "设备归类快照无法读取或校验；原始用量统计不受影响。"
+
+    def record_device_allocation(self, value):
+        if not isinstance(value, dict) or value:
+            raise ValueError("设备归类请求只接受空对象，不接受手工金额或 Token")
+        with self.snapshot_lock:
+            snapshot = self._snapshot_for_generation(self.snapshot_generation)
+            monitoring = snapshot["monitoring"]
+            if (monitoring.get("activeStatus") == "error"
+                    or monitoring.get("archive", {}).get("writeErrors", 0)
+                    or monitoring.get("collection", {}).get("writeErrors", 0)
+                    or monitoring.get("coverage", {}).get("backfillingTasks", 0)):
+                raise ValueError("本机日志尚未核对完或保存异常，请待采集就绪后再记录")
+            try:
+                report = build_allocation(self.history_turns, snapshot["conversations"],
+                                          snapshot["settings"], now=datetime.now().astimezone())
+                with locked(self.folder, "device-allocation"):
+                    write_json(self.folder / "device-allocation.json", report)
+                    saved, failure = self.device_allocation_view()
+                    if failure or saved != report:
+                        raise ValueError()
+            except (OSError, ValueError, TypeError, RecursionError):
+                raise ValueError("设备归类未通过核对或保存，尚未确认记录成功；原始用量不变") from None
+            return {"ok": True, "deviceAllocation": saved}
+
     def acknowledge_historical_gaps(self, value):
         if not isinstance(value, dict) or set(value) != {"threadIds"}:
             raise ValueError("历史缺口请求字段无效")
@@ -1270,7 +1309,7 @@ class Meter:
     def _snapshot_input_stamp(self):
         result = []
         for path in (self.folder / "settings.json", self.folder / "registry.json", self.archive.path,
-                     self.folder / "historical-gaps.json"):
+                     self.folder / "historical-gaps.json", self.folder / "device-allocation.json"):
             try:
                 info = path.stat()
                 result.append((info.st_ino, info.st_size, info.st_mtime_ns))
@@ -1542,11 +1581,12 @@ class Meter:
         # doing so would durably revoke historical acknowledgements and report
         # an empty, healthy dashboard after a read or format failure.
         gap_view = self._historical_gap_view(None if registry_failed else records)
+        snapshot["deviceAllocation"], snapshot["deviceAllocationError"] = self.device_allocation_view()
         return decorate_snapshot(snapshot, gap_view, self.collection_sources)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.17.1"
+    server_version = "CodexUsageMeter/0.18.0"
 
     def log_message(self, *_):
         pass
@@ -1612,7 +1652,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.17.1", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.18.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1625,7 +1665,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/refresh":
             return self.respond({"ok": True, "refresh": self.server.meter.start_refresh()})
-        if self.path not in ("/api/settings", "/api/conversation-label", "/api/official-usage-refresh", "/api/historical-gaps"):
+        if self.path not in ("/api/settings", "/api/conversation-label", "/api/official-usage-refresh", "/api/historical-gaps", "/api/device-allocation"):
             return self.respond({"error": "不存在"}, 404)
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -1635,6 +1675,8 @@ class Handler(BaseHTTPRequestHandler):
             if size < 1 or size > limit or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("请求格式无效")
             value = json.loads(self.rfile.read(size))
+            if self.path == "/api/device-allocation":
+                return self.respond(self.server.meter.record_device_allocation(value))
             if self.path == "/api/historical-gaps":
                 return self.respond(self.server.meter.acknowledge_historical_gaps(value))
             if self.path == "/api/official-usage-refresh":
@@ -1938,7 +1980,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.17.1"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.18.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

@@ -28,7 +28,7 @@ RUNTIME_FILES = (
     "scripts/meter.py", "scripts/usage_log.py", "scripts/pricing.py", "scripts/periods.py",
     "scripts/conversations.py", "scripts/platform_support.py", "scripts/rpc_transport.py", "scripts/official_credits.py",
     "scripts/descendants.py", "scripts/usage_archive.py", "scripts/compressed_sources.py",
-    "scripts/historical_gaps.py", "scripts/historical_gap_view.py",
+    "scripts/historical_gaps.py", "scripts/historical_gap_view.py", "scripts/device_allocation.py",
     "scripts/service_lifecycle.py", "scripts/browser_access.py", "web/index.html",
     ".codex-plugin/plugin.json",
 )
@@ -93,6 +93,7 @@ def _runtime_payload(root, *, managed=False):
     legacy_archive = False
     legacy_compressed = False
     legacy_historical_gaps = False
+    legacy_device_allocation = False
     if managed:
         try:
             old_manifest = json.loads(_read_existing(root / ".codex-plugin/plugin.json", 32768) or b"{}")
@@ -103,6 +104,7 @@ def _runtime_payload(root, *, managed=False):
             legacy_archive = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 14)
             legacy_compressed = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 16)
             legacy_historical_gaps = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 17)
+            legacy_device_allocation = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 18)
         except (ValueError, AttributeError):
             pass
     for name in RUNTIME_FILES:
@@ -119,6 +121,8 @@ def _runtime_payload(root, *, managed=False):
             if managed and legacy_compressed and name == "scripts/compressed_sources.py":
                 continue
             if managed and legacy_historical_gaps and name in ("scripts/historical_gaps.py", "scripts/historical_gap_view.py"):
+                continue
+            if managed and legacy_device_allocation and name == "scripts/device_allocation.py":
                 continue
             raise RuntimeError("插件运行文件不完整，请重新安装完整源码")
         payload[name] = raw

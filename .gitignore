@@ -27,6 +27,7 @@ compressed-source-cache/
 compressed-observations.json
 source-observations.json
 historical-gaps.json
+device-allocation.json
 *.sqlite3
 *.sqlite3-*
 service-mode.json
