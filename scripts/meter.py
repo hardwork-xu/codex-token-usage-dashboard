@@ -206,7 +206,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.16.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.16.1"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -476,13 +476,16 @@ class Meter:
         The source fingerprint and archive hash must both match. Otherwise the
         exact sibling is decoded and independently checked by the normal reader.
         Raw expanded files are released only after a complete durable save.
+        A validated archived read carries its original save metadata so callers
+        do not rewrite an unchanged observation or claim a newer save time.
         """
         compressed = self.compressed_cache.inspect(thread_id, path) if path.suffix == ".jsonl" else None
         observed = self.compressed_observations.get(thread_id)
         if compressed is not None and isinstance(observed, dict) and observed.get("sourceStamp") == compressed:
             saved = self.archive.load(thread_id)
             if saved is not None and saved["contentHash"] == observed.get("contentHash"):
-                return reproject_usage(saved["result"], self.reader_override_windows or {}), None, compressed
+                outcome = {"savedAt": saved["savedAt"], "retained": False, "unchanged": True}
+                return reproject_usage(saved["result"], self.reader_override_windows or {}), None, compressed, outcome
         target = path
         if compressed is not None:
             failure = self.compressed_failures.get(thread_id)
@@ -492,12 +495,12 @@ class Meter:
             if resolved is None or resolved["sourceStamp"] != compressed:
                 raise CompressedSourcePending()
             if "result" in resolved:
-                return reproject_usage(resolved["result"], self.reader_override_windows or {}), None, compressed
+                return reproject_usage(resolved["result"], self.reader_override_windows or {}), None, compressed, None
             target = Path(resolved["path"])
         reader = self.cache.get(thread_id)
         if reader is None:
             reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=self.reader_override_windows or {})
-        return reader.read(target, time_budget=time_budget), reader, compressed
+        return reader.read(target, time_budget=time_budget), reader, compressed, None
 
     def _prepare_compressed_source(self):
         """Decode at most one cold source outside the shared snapshot lock.
@@ -692,7 +695,7 @@ class Meter:
                     reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=windows)
                 read_succeeded = False
                 try:
-                    result, reader, compressed = self._read_registered(thread_id, path, time_budget=0.025)
+                    result, reader, compressed, archived = self._read_registered(thread_id, path, time_budget=0.025)
                     read_succeeded = True
                     reading = result.get("reading", {})
                     complete = reading.get("complete") is True
@@ -720,8 +723,10 @@ class Meter:
                             self.descendant_roots[thread_id] = modified_at
                         if unchanged_observation:
                             continue
-                        outcome = self.archive.save(thread_id, result)
-                        self._remember_compressed(thread_id, path, result, outcome, compressed)
+                        outcome = archived
+                        if outcome is None:
+                            outcome = self.archive.save(thread_id, result)
+                            self._remember_compressed(thread_id, path, result, outcome, compressed)
                         continuation = outcome.get("continuation") or result.get("continuation") or {}
                         state.update(saved=True, writeError=False, retained=outcome.get("retained") is True,
                                      continuationGap=continuation.get("status") == "continuation_with_gap")
@@ -1151,10 +1156,11 @@ class Meter:
             result, saved, archive_reason = None, None, None
             reader = None
             compressed = None
+            archived = None
             source_rejected = False
             try:
                 path = Path(record["path"])
-                result, reader, compressed = self._read_registered(thread_id, path, time_budget=weights[thread_id] / total_weight)
+                result, reader, compressed, archived = self._read_registered(thread_id, path, time_budget=weights[thread_id] / total_weight)
                 reading = result.get("reading")
                 self.reader_incomplete[thread_id] = not (isinstance(reading, dict) and reading.get("complete") is True)
                 successful_reads += 1
@@ -1183,8 +1189,10 @@ class Meter:
                     # prefix, including across worker restarts.
                     self.archive.invalidate(thread_id)
                 elif result is not None and result.get("identityVerified") is True:
-                    outcome = self.archive.save(thread_id, result)
-                    self._remember_compressed(thread_id, path, result, outcome, compressed)
+                    outcome = archived
+                    if outcome is None:
+                        outcome = self.archive.save(thread_id, result)
+                        self._remember_compressed(thread_id, path, result, outcome, compressed)
                     saved = {"savedAt": outcome.get("savedAt")}
                     if outcome.get("merged"):
                         saved = self.archive.load(thread_id)
@@ -1218,10 +1226,10 @@ class Meter:
                 if archive_reason:
                     errors.append("部分用量来自已保存明细，原日志尚未重新核对")
                 for raw_turn in result["turns"]:
-                    turn = deepcopy(raw_turn)
                     # Detailed event observations are durable on disk; the UI
-                    # uses the smaller conserved model/speed slices.
-                    turn.pop("usageSegments", None)
+                    # uses the smaller conserved model/speed slices. Exclude
+                    # segments before copying rather than duplicate and discard.
+                    turn = deepcopy({key: value for key, value in raw_turn.items() if key != "usageSegments"})
                     turn["sourceAvailability"] = "archive" if archive_reason else "live"
                     if saved:
                         turn["archiveSavedAt"] = saved.get("savedAt")
@@ -1300,7 +1308,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.16.0"
+    server_version = "CodexUsageMeter/0.16.1"
 
     def log_message(self, *_):
         pass
@@ -1358,7 +1366,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.16.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.16.1", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1682,7 +1690,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.16.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.16.1"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

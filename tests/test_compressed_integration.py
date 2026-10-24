@@ -81,8 +81,82 @@ class CompressedIntegrationTests(unittest.TestCase):
         self.subject.collect_usage()
         self.subject.compressed_observations[THREAD]["contentHash"] = "invalid"
         self.subject._prepare_compressed_source()
-        self.subject.snapshot()
+        with mock.patch.object(self.subject.archive, "save", wraps=self.subject.archive.save) as save:
+            self.subject.snapshot()
+        save.assert_called_once()
         self.assertEqual(self.subject.compressed_cache.resolve.call_count, 2)
+
+    def test_verified_archive_read_is_checked_once_without_rewrite_or_fresh_save_time(self):
+        self.subject.collect_usage()
+        before = self.subject.archive.load(THREAD)
+        observations = (self.folder / "compressed-observations.json").read_bytes()
+        with mock.patch.object(self.subject.archive, "load", wraps=self.subject.archive.load) as load, \
+                mock.patch.object(self.subject.archive, "save", side_effect=AssertionError("unchanged archive rewrite")), \
+                mock.patch.object(self.subject, "_remember_compressed", side_effect=AssertionError("already durable")):
+            snapshot = self.subject.snapshot()
+        load.assert_called_once_with(THREAD)
+        self.assertEqual(snapshot["turns"][0]["archiveSavedAt"], before["savedAt"])
+        self.assertEqual(snapshot["conversations"][0]["archive"]["savedAt"], before["savedAt"])
+        self.assertEqual(snapshot["conversations"][0]["archive"]["source"], "compressed")
+        self.assertEqual(self.subject.archive.load(THREAD), before)
+        self.assertEqual((self.folder / "compressed-observations.json").read_bytes(), observations)
+
+        fresh = meter.Meter(self.folder)
+        self.adapter(fresh)
+        with mock.patch.object(fresh.archive, "save", side_effect=AssertionError("unchanged collector rewrite")), \
+                mock.patch.object(fresh, "_remember_compressed", side_effect=AssertionError("already durable")):
+            collection = fresh.collect_usage()
+        self.assertEqual(collection["status"], "ready")
+        self.assertEqual(collection["lastSavedAt"], before["savedAt"])
+
+    def test_verified_archive_reprojects_current_speed_window_without_changing_durable_evidence(self):
+        self.subject.collect_usage()
+        before = self.subject.archive.load(THREAD)
+        meter.write_json(self.folder / "settings.json", {
+            "pricingMode": "api", "speedOverrides": {"2026-10-16": "fast"},
+            "speedOverrideWindows": {"2026-10-16": {
+                "startAt": 1792108800, "endAt": 1792195200, "timeZone": "UTC"}}})
+        with mock.patch.object(self.subject.archive, "save", side_effect=AssertionError("view is not a new observation")):
+            state = self.subject.snapshot()
+        self.assertEqual(state["turns"][0]["usageSlices"][0]["speedOverrideDay"], "2026-10-16")
+        self.assertEqual(state["turns"][0]["tokens"], before["result"]["turns"][0]["tokens"])
+        self.assertEqual(self.subject.archive.load(THREAD), before)
+
+    def test_verified_archive_reuse_preserves_partial_and_pagination_gap(self):
+        self.subject.collect_usage()
+        result = self.subject.archive.load(THREAD)["result"]
+        result["turns"][0].update(quality="partial", note="Synthetic historical coverage gap")
+        result["warnings"] = ["Synthetic historical coverage gap"]
+        result["continuation"] = {
+            "status": "continuation_with_gap", "retainedTurns": 0, "sourceTurns": 1,
+            "overlapSegments": 0, "legacyAnchor": False,
+            "sourceFirstOrdinal": 10, "sourceLastOrdinal": 20}
+        self.subject.archive.save(THREAD, result)
+        before = self.subject.archive.load(THREAD)
+        self.subject.compressed_observations[THREAD]["contentHash"] = before["contentHash"]
+        with mock.patch.object(self.subject.archive, "save", side_effect=AssertionError("must preserve old evidence")):
+            state = self.subject.snapshot()
+        self.assertEqual(state["turns"][0]["quality"], "partial")
+        self.assertEqual(state["turns"][0]["note"], "Synthetic historical coverage gap")
+        self.assertEqual(state["monitoring"]["archive"]["status"], "partial")
+        self.assertEqual(state["conversations"][0]["archive"]["continuation"], result["continuation"])
+        self.assertEqual(state["conversations"][0]["archive"]["savedAt"], before["savedAt"])
+        self.assertEqual(self.subject.archive.load(THREAD), before)
+
+    def test_ui_never_copies_full_segments_and_keeps_summary_independent(self):
+        self.subject.collect_usage()
+        saved = self.subject.archive.load(THREAD)
+        class SegmentsWithoutCopy(list):
+            def __deepcopy__(self, memo):
+                raise AssertionError("UI must not duplicate full event history")
+        result = saved["result"]
+        result["turns"][0]["usageSegments"] = SegmentsWithoutCopy(result["turns"][0]["usageSegments"])
+        archived = {"savedAt": saved["savedAt"], "retained": False, "unchanged": True}
+        with mock.patch.object(self.subject, "_read_registered", return_value=(result, None, self.stamp, archived)):
+            state = self.subject.snapshot()
+        self.assertNotIn("usageSegments", state["turns"][0])
+        state["turns"][0]["tokens"]["total"] = 999
+        self.assertEqual(result["turns"][0]["tokens"]["total"], 100)
 
     def test_decoder_unavailable_retains_old_numbers_and_explains_missing_dependency(self):
         self.subject.collect_usage()

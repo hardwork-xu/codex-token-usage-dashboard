@@ -151,7 +151,7 @@ class BrowserAccessTests(unittest.TestCase):
         self.assertEqual((self.runtime / "scripts/compressed_sources.py").read_bytes(),
                          (self.source / "scripts/compressed_sources.py").read_bytes())
         self.assertEqual(self.endpoint.read_bytes(), endpoint)
-        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.16.0")
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.16.1")
 
     def test_new_runtime_missing_compressed_source_module_is_rejected_before_mutation(self):
         self.seed_installed()
