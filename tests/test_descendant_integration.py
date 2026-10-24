@@ -50,6 +50,28 @@ class DescendantIntegrationTests(unittest.TestCase):
             self.meter.refresh_descendants()
             self.assertTrue(rpc.call_args.kwargs['archived'])
 
+    def test_existing_child_verified_path_repairs_stale_registration_preserving_alias(self):
+        meter.write_json(self.folder / 'registry.json', {
+            'root': {'path': 'root.jsonl'},
+            'child': {'path': 'stale.jsonl', 'alias': 'synthetic label', 'registeredAt': 123}})
+        with patch.object(meter, 'discover_descendants', return_value=self.response(
+                threads=[{'threadId': 'child', 'path': 'verified-new.jsonl'}])):
+            self.meter.refresh_descendants()
+        child = meter.read_json(self.folder / 'registry.json', {})['child']
+        self.assertEqual(child, {'path': 'verified-new.jsonl', 'alias': 'synthetic label', 'registeredAt': 123})
+
+    def test_existing_child_concurrent_hook_path_wins_over_metadata_result(self):
+        meter.write_json(self.folder / 'registry.json', {
+            'root': {'path': 'root.jsonl'}, 'child': {'path': 'stale.jsonl'}})
+        def reply(*args, **kwargs):
+            meter.write_json(self.folder / 'registry.json', {
+                'root': {'path': 'root.jsonl'}, 'child': {'path': 'new-hook.jsonl', 'alias': 'live'}})
+            return self.response(threads=[{'threadId': 'child', 'path': 'metadata.jsonl'}])
+        with patch.object(meter, 'discover_descendants', side_effect=reply):
+            self.meter.refresh_descendants()
+        self.assertEqual(meter.read_json(self.folder / 'registry.json', {})['child'],
+                         {'path': 'new-hook.jsonl', 'alias': 'live'})
+
     def test_pagination_resumes_and_error_preserves_cursor(self):
         self.meter.descendant_progress['root'] = {'cursor': 'page-two', 'archived': False}
         with patch.object(meter, 'discover_descendants', return_value=self.response(error='unavailable', nextCursor='page-two')) as rpc:

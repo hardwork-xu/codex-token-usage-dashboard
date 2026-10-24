@@ -139,6 +139,48 @@ class BrowserAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
             access.install(self.folder)
 
+    def test_compressed_source_upgrade_accepts_owned_015_runtime(self):
+        self.seed_installed()
+        manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["version"] = "0.15.0+synthetic.1"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        (self.runtime / "scripts/compressed_sources.py").unlink()
+        endpoint = self.endpoint.read_bytes()
+        self.assertEqual(access.install(self.folder)["port"], 51234)
+        self.assertEqual((self.runtime / "scripts/compressed_sources.py").read_bytes(),
+                         (self.source / "scripts/compressed_sources.py").read_bytes())
+        self.assertEqual(self.endpoint.read_bytes(), endpoint)
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.16.0")
+
+    def test_new_runtime_missing_compressed_source_module_is_rejected_before_mutation(self):
+        self.seed_installed()
+        (self.runtime / "scripts/compressed_sources.py").unlink()
+        plist, marker = self.plist.read_bytes(), self.marker.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
+            access.install(self.folder)
+        self.assertEqual(self.plist.read_bytes(), plist)
+        self.assertEqual(self.marker.read_bytes(), marker)
+        self.assertEqual(self.events, [])
+
+    def test_compressed_source_upgrade_rollback_restores_owned_legacy_payload(self):
+        self.seed_installed()
+        manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["version"] = "0.15.0"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        (self.runtime / "scripts/compressed_sources.py").unlink()
+        original_manifest = manifest.read_bytes()
+        original_script = self.script.read_bytes()
+        self.fail_bootstrap = True
+        with self.assertRaisesRegex(RuntimeError, "原配置已恢复"):
+            access.install(self.folder)
+        self.assertEqual(manifest.read_bytes(), original_manifest)
+        self.assertEqual(self.script.read_bytes(), original_script)
+        self.assertFalse((self.runtime / "scripts/compressed_sources.py").exists())
+        self.assertTrue(self.loaded)
+        self.assertEqual(list(self.folder.glob(".browser-runtime-*")), [])
+
     def test_no_saved_endpoint_uses_default_or_explicit_port(self):
         self.endpoint.unlink()
         self.assertEqual(access.install(self.folder, port=51345)["port"], 51345)

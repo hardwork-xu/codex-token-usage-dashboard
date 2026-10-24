@@ -25,6 +25,7 @@ from urllib import request, error, parse
 
 from usage_log import read_usage_log, UsageLogReader, reproject_usage
 from usage_archive import UsageArchive
+from compressed_sources import CompressedSourceCache, CompressedSourceError
 from pricing import estimate_turn
 from official_credits import (account_scope, credits_from_response, credit_view,
                               record_balance, fetch_thread_usage, thread_usage_view)
@@ -49,7 +50,12 @@ COLLECTION_INTERVAL = 5
 COLLECTION_BATCH = 64
 COLLECTION_ACTIVE_GRACE = 3600
 COLLECTION_TAIL_GRACE = 60
+COMPRESSED_READY_BYTES = 256 * 1024 * 1024
 EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SubagentStop", "SubagentStart"}
+
+
+class CompressedSourcePending(RuntimeError):
+    """Cold decoding belongs to the collector, never an HTTP snapshot."""
 
 
 def data_dir(value=None):
@@ -200,7 +206,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.15.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.16.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -400,6 +406,15 @@ class Meter:
         self.folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.cache = {}
         self.archive = UsageArchive(folder)
+        self.compressed_cache = CompressedSourceCache(folder / "compressed-source-cache")
+        self.compressed_observations = read_json(folder / "compressed-observations.json", {})
+        if not isinstance(self.compressed_observations, dict):
+            self.compressed_observations = {}
+        self.compressed_ready = {}
+        self.compressed_failures = {}
+        self.compressed_release_queue = {}
+        self.compressed_prepare_lock = threading.Lock()
+        self.compressed_prepare_cursor = 0
         self.reader_incomplete = {}
         self.reader_override_windows = None
         self.snapshot_lock = threading.Lock()
@@ -446,6 +461,166 @@ class Meter:
                                   "pendingTasks": 0, "runningTasks": 0,
                                   "unreadableTasks": 0, "writeErrors": 0, "errorCode": None}
 
+    def _source_info(self, thread_id, path):
+        """Inspect only the registered file or its exact compressed sibling."""
+        compressed = self.compressed_cache.inspect(thread_id, path) if path.suffix == ".jsonl" else None
+        if compressed is not None:
+            stamp = ("compressed", json.dumps(compressed, sort_keys=True, separators=(",", ":")))
+            return stamp, Path(str(path) + ".zst").stat().st_mtime
+        info = path.lstat()
+        return (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns), info.st_mtime
+
+    def _read_registered(self, thread_id, path, time_budget):
+        """Reuse durable numeric observations of an unchanged compressed source.
+
+        The source fingerprint and archive hash must both match. Otherwise the
+        exact sibling is decoded and independently checked by the normal reader.
+        Raw expanded files are released only after a complete durable save.
+        """
+        compressed = self.compressed_cache.inspect(thread_id, path) if path.suffix == ".jsonl" else None
+        observed = self.compressed_observations.get(thread_id)
+        if compressed is not None and isinstance(observed, dict) and observed.get("sourceStamp") == compressed:
+            saved = self.archive.load(thread_id)
+            if saved is not None and saved["contentHash"] == observed.get("contentHash"):
+                return reproject_usage(saved["result"], self.reader_override_windows or {}), None, compressed
+        target = path
+        if compressed is not None:
+            failure = self.compressed_failures.get(thread_id)
+            if failure and failure["sourceStamp"] == compressed:
+                raise CompressedSourceError(failure["code"])
+            resolved = self.compressed_ready.get(thread_id)
+            if resolved is None or resolved["sourceStamp"] != compressed:
+                raise CompressedSourcePending()
+            if "result" in resolved:
+                return reproject_usage(resolved["result"], self.reader_override_windows or {}), None, compressed
+            target = Path(resolved["path"])
+        reader = self.cache.get(thread_id)
+        if reader is None:
+            reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=self.reader_override_windows or {})
+        return reader.read(target, time_budget=time_budget), reader, compressed
+
+    def _prepare_compressed_source(self):
+        """Decode at most one cold source outside the shared snapshot lock.
+
+        HTTP readers keep using durable observations while this bounded worker
+        decodes. A successful result still needs normal identity/parsing/archive
+        checks. Rotating exact registered paths prevents one bad source starving
+        the rest; unchanged failures retry after a cooldown.
+        """
+        if not self.compressed_prepare_lock.acquire(blocking=False):
+            return
+        try:
+            records = read_json(self.folder / "registry.json", {})
+            if not isinstance(records, dict):
+                records = {}
+            # A changed or removed source must not occupy the entire expansion
+            # budget forever. Drop its reader before releasing the stale input.
+            for thread_id, ready in list(self.compressed_ready.items()):
+                record = records.get(thread_id)
+                registered = record.get("path") if isinstance(record, dict) else None
+                current = None
+                if registered == ready.get("registeredPath"):
+                    with contextlib.suppress(OSError, ValueError, TypeError):
+                        current = self.compressed_cache.inspect(thread_id, Path(registered))
+                if current == ready["sourceStamp"]:
+                    continue
+                with self.snapshot_lock:
+                    if self.compressed_ready.get(thread_id) is ready:
+                        self.compressed_ready.pop(thread_id, None)
+                        self.cache.pop(thread_id, None)
+                        self.compressed_release_queue[thread_id] = (
+                            Path(ready["registeredPath"]), ready["sourceStamp"])
+            self._cleanup_compressed_sources()
+            # Drain decoded inputs before allocating another large expansion.
+            # The next single input still has the decoder's independent limit.
+            ready_bytes = 0
+            for ready in list(self.compressed_ready.values()):
+                with contextlib.suppress(OSError):
+                    ready_bytes += Path(ready["path"]).stat().st_size
+            if ready_bytes >= COMPRESSED_READY_BYTES:
+                return
+            if not records:
+                return
+            items = list(records.items())
+            start = self.compressed_prepare_cursor % len(items)
+            for offset in range(len(items)):
+                index = (start + offset) % len(items)
+                thread_id, record = items[index]
+                compressed = None
+                try:
+                    path = Path(record["path"])
+                    if path.suffix != ".jsonl":
+                        continue
+                    compressed = self.compressed_cache.inspect(thread_id, path)
+                    if compressed is None:
+                        continue
+                    ready = self.compressed_ready.get(thread_id)
+                    if ready and ready["sourceStamp"] == compressed:
+                        continue
+                    observed = self.compressed_observations.get(thread_id)
+                    if isinstance(observed, dict) and observed.get("sourceStamp") == compressed:
+                        saved = self.archive.load(thread_id)
+                        if saved and saved["contentHash"] == observed.get("contentHash"):
+                            continue
+                    failure = self.compressed_failures.get(thread_id)
+                    if (failure and failure["sourceStamp"] == compressed and
+                            time.monotonic() < failure["retryAt"]):
+                        continue
+                    self.compressed_prepare_cursor = (index + 1) % len(items)
+                    resolved = self.compressed_cache.resolve(thread_id, path)
+                    if resolved is None or resolved["sourceStamp"] != compressed:
+                        raise CompressedSourceError("source_changed")
+                    resolved["registeredPath"] = str(path)
+                    self.compressed_ready[thread_id] = resolved
+                    self.compressed_failures.pop(thread_id, None)
+                    return
+                except (OSError, KeyError, TypeError, ValueError) as exc:
+                    # Content-free status is exposed on the normal read path.
+                    # Archive errors remain the archive reader's responsibility.
+                    if isinstance(exc, CompressedSourceError) and compressed is not None:
+                        self.compressed_failures[thread_id] = {"sourceStamp": compressed, "code": exc.code,
+                                                              "retryAt": time.monotonic() + 60}
+                        return
+        finally:
+            self.compressed_prepare_lock.release()
+
+    def _remember_compressed(self, thread_id, path, result, outcome, compressed):
+        if compressed is None or result.get("reading", {}).get("complete") is not True:
+            return
+        if outcome.get("retained"):
+            # Keep the current conflicting numeric observation available for
+            # diagnostics without retaining its potentially huge decoded file.
+            ready = self.compressed_ready.get(thread_id)
+            if ready is not None and "result" not in ready:
+                ready["result"] = deepcopy(result)
+                self.compressed_release_queue[thread_id] = (path, compressed)
+                self.cache.pop(thread_id, None)
+            return
+        saved = self.archive.load(thread_id)
+        if saved is None:
+            return
+        observation = {"sourceStamp": compressed, "contentHash": saved["contentHash"]}
+        if self.compressed_observations.get(thread_id) != observation:
+            self.compressed_observations[thread_id] = observation
+            write_json(self.folder / "compressed-observations.json", self.compressed_observations)
+        if self.compressed_ready.pop(thread_id, None) is not None:
+            # Decoder cache locks can be held by a slow background extraction.
+            # Queue cleanup; HTTP snapshots must never wait for that lock.
+            self.compressed_release_queue[thread_id] = (path, compressed)
+        # Its input file no longer exists; future reads use the checked numeric
+        # snapshot or create a fresh reader if the compressed source changes.
+        self.cache.pop(thread_id, None)
+
+    def _cleanup_compressed_sources(self):
+        for thread_id in list(self.compressed_release_queue)[:16]:
+            pending = self.compressed_release_queue.pop(thread_id, None)
+            if pending is None:
+                continue
+            try:
+                self.compressed_cache.release(thread_id, *pending)
+            except (OSError, ValueError, TimeoutError):
+                self.compressed_release_queue.setdefault(thread_id, pending)
+
     def collection_busy(self):
         """Bounded liveness lease; stale running turns never keep a worker forever."""
         now = time.monotonic()
@@ -460,6 +635,8 @@ class Meter:
         pending sources equal bounded work, while already saved unchanged files
         need only a stat. A failed save is never remembered as successful.
         """
+        self._cleanup_compressed_sources()
+        self._prepare_compressed_source()
         with self.snapshot_lock:
             now, monotonic = time.time(), time.monotonic()
             registry_path = self.folder / "registry.json"
@@ -484,16 +661,16 @@ class Meter:
                 state = self.collection_sources.setdefault(thread_id, {})
                 try:
                     path = Path(record["path"])
-                    info = path.lstat()
-                    stamp = (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-                except (OSError, KeyError, TypeError, ValueError):
-                    state.update(unreadable=True, pending=False, running=False, activeUntil=0, saved=False)
+                    stamp, modified_at = self._source_info(thread_id, path)
+                except (OSError, KeyError, TypeError, ValueError) as exc:
+                    state.update(unreadable=True, pending=False, running=False, activeUntil=0, saved=False,
+                                 sourceError=exc.code if isinstance(exc, CompressedSourceError) else None)
                     continue
                 if (state.get("saved") and state.get("stamp") == stamp
                         and not state.get("pending")):
                     continue
                 if state.get("stamp") != stamp or monotonic >= state.get("retryAt", 0):
-                    candidates.append((thread_id, path, stamp, info.st_mtime))
+                    candidates.append((thread_id, path, stamp, modified_at))
             # A rotating cursor prevents a permanently huge or bad first file
             # from starving later registrations.
             if candidates:
@@ -510,11 +687,12 @@ class Meter:
                     # changes; force fresh identity checks instead of letting
                     # the incremental reader reuse its size/mtime fast path.
                     reader = None
+                    self.cache.pop(thread_id, None)
                 if reader is None:
                     reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=windows)
                 read_succeeded = False
                 try:
-                    result = reader.read(path, time_budget=0.025)
+                    result, reader, compressed = self._read_registered(thread_id, path, time_budget=0.025)
                     read_succeeded = True
                     reading = result.get("reading", {})
                     complete = reading.get("complete") is True
@@ -524,7 +702,7 @@ class Meter:
                                              and reading.get("bytesRead", 0) == previous_bytes
                                              and state.get("pending") == (not complete))
                     state.update(stamp=stamp, bytesRead=reading.get("bytesRead", 0),
-                                 pending=not complete, unreadable=False, retryAt=0,
+                                 pending=not complete, unreadable=False, retryAt=0, sourceError=None,
                                  running=any(turn.get("status") == "running" for turn in result.get("turns", [])),
                                  activeUntil=0)
                     self.reader_incomplete[thread_id] = not complete
@@ -543,15 +721,22 @@ class Meter:
                         if unchanged_observation:
                             continue
                         outcome = self.archive.save(thread_id, result)
-                        state.update(saved=True, writeError=False, retained=outcome.get("retained") is True)
+                        self._remember_compressed(thread_id, path, result, outcome, compressed)
+                        continuation = outcome.get("continuation") or result.get("continuation") or {}
+                        state.update(saved=True, writeError=False, retained=outcome.get("retained") is True,
+                                     continuationGap=continuation.get("status") == "continuation_with_gap")
                         saved_at = outcome.get("savedAt")
                         if saved_at is not None:
                             self.collection_status["lastSavedAt"] = max(saved_at, self.collection_status["lastSavedAt"] or 0)
                     else:
                         state.update(saved=False, writeError=False)
-                except Exception:
+                except CompressedSourcePending:
+                    state.update(pending=True, unreadable=False, running=False, activeUntil=0,
+                                 sourceError=None, stamp=stamp, retryAt=0)
+                except Exception as exc:
                     state["saved"] = False
-                    if reader.identity_rejected:
+                    if (reader is not None and reader.identity_rejected or
+                            isinstance(exc, CompressedSourceError) and exc.code == "identity_mismatch"):
                         self.descendant_roots.pop(thread_id, None)
                         try:
                             self.archive.invalidate(thread_id)
@@ -565,20 +750,25 @@ class Meter:
                         state.update(writeError=True, retryAt=0)
                     else:
                         state.update(unreadable=True, pending=False, running=False, activeUntil=0,
-                                     stamp=stamp, retryAt=monotonic + 60)
+                                     stamp=stamp, retryAt=monotonic + 60,
+                                     sourceError=exc.code if isinstance(exc, CompressedSourceError) else None)
             states = list(self.collection_sources.values())
             self.collection_active_until = max((state.get("activeUntil", 0) for state in states), default=0)
             pending = sum(bool(state.get("pending")) or not state for state in states)
             unreadable = sum(bool(state.get("unreadable")) for state in states)
             write_errors = sum(bool(state.get("writeError")) for state in states)
             changed_sources = sum(bool(state.get("retained")) and not state.get("pending") for state in states)
+            continuation_gaps = sum(bool(state.get("continuationGap")) for state in states)
+            decoder_unavailable = sum(state.get("sourceError") == "decoder_unavailable" for state in states)
             self.collection_status.update(
-                status="error" if write_errors else "partial" if unreadable or changed_sources else "collecting" if pending else "ready",
+                status="error" if write_errors else "partial" if unreadable or changed_sources or continuation_gaps else "collecting" if pending else "ready",
                 updatedAt=now, registeredTasks=len(records), pendingTasks=pending,
                 runningTasks=sum(bool(state.get("running")) for state in states),
                 unreadableTasks=unreadable, writeErrors=write_errors,
-                errorCode="archive_write_failed" if write_errors else "source_unavailable" if unreadable else
-                          "source_changed" if changed_sources else None)
+                continuationGapTasks=continuation_gaps, decoderUnavailableTasks=decoder_unavailable,
+                errorCode="archive_write_failed" if write_errors else "decoder_unavailable" if decoder_unavailable else
+                          "source_unavailable" if unreadable else "source_changed" if changed_sources else
+                          "continuation_with_gap" if continuation_gaps else None)
             try:
                 self.collection_status["savedTasks"] = self.archive.stats()["savedThreads"]
             except Exception:
@@ -695,6 +885,13 @@ class Meter:
                         if thread_id not in current:
                             current[thread_id] = {"path": row["path"], "registeredAt": time.time(),
                                 "registrationSource": "verified_descendant"}
+                            changed = True
+                        elif (isinstance(records.get(thread_id), dict) and isinstance(current[thread_id], dict)
+                              and current[thread_id].get("path") == records[thread_id].get("path")
+                              and current[thread_id].get("path") != row["path"]):
+                            # Discovery already checked this exact identity and
+                            # ancestry. Preserve aliases and concurrent Hook updates.
+                            current[thread_id]["path"] = row["path"]
                             changed = True
                     if changed:
                         write_json(self.folder / "registry.json", current)
@@ -953,31 +1150,46 @@ class Meter:
         for thread_id, record in records.items():
             result, saved, archive_reason = None, None, None
             reader = None
+            compressed = None
+            source_rejected = False
             try:
                 path = Path(record["path"])
-                reader = self.cache.get(thread_id)
-                if reader is None:
-                    reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=windows)
-                result = reader.read(path, time_budget=weights[thread_id] / total_weight)
+                result, reader, compressed = self._read_registered(thread_id, path, time_budget=weights[thread_id] / total_weight)
                 reading = result.get("reading")
                 self.reader_incomplete[thread_id] = not (isinstance(reading, dict) and reading.get("complete") is True)
                 successful_reads += 1
                 readings[thread_id] = result.get("reading")
-            except Exception:
+            except CompressedSourcePending:
+                self.reader_incomplete[thread_id] = True
+                readings[thread_id] = {"complete": False, "bytesRead": 0, "fileBytes": 0}
+                errors.append("压缩历史正在后台恢复，当前先显示已保存明细。")
+            except Exception as exc:
+                reader = self.cache.get(thread_id)
+                source_rejected = isinstance(exc, CompressedSourceError) and exc.code == "identity_mismatch"
                 self.reader_incomplete[thread_id] = True
                 # Do not display stale last-good token totals as a new successful read.
                 # Keep the reader's rejection state: a foreign session found in
                 # a later chunk must not revive an earlier prefix next refresh.
-                read_errors[thread_id] = "这段对话的记录暂时无法读取，请稍后刷新。"
-                errors.append("某个已登记任务的记录暂不可读或格式已变化")
+                if isinstance(exc, CompressedSourceError) and exc.code == "decoder_unavailable":
+                    read_errors[thread_id] = "日志已压缩；需要 Python 3.14、zstandard 模块或 zstd 工具才能继续读取。"
+                elif isinstance(exc, CompressedSourceError):
+                    read_errors[thread_id] = "这段对话的压缩日志未通过读取或校验，已保留此前的有效明细。"
+                else:
+                    read_errors[thread_id] = "这段对话的记录暂时无法读取，请稍后刷新。"
+                errors.append(read_errors[thread_id])
             try:
-                if reader is not None and reader.identity_rejected is True:
+                if source_rejected or reader is not None and reader.identity_rejected is True:
                     # A later contradictory session invalidates the earlier
                     # prefix, including across worker restarts.
                     self.archive.invalidate(thread_id)
                 elif result is not None and result.get("identityVerified") is True:
                     outcome = self.archive.save(thread_id, result)
+                    self._remember_compressed(thread_id, path, result, outcome, compressed)
                     saved = {"savedAt": outcome.get("savedAt")}
+                    if outcome.get("merged"):
+                        saved = self.archive.load(thread_id)
+                        if saved:
+                            result = reproject_usage(saved["result"], windows)
                     if outcome.get("retained"):
                         saved = self.archive.load(thread_id)
                         archive_reason = ("backfilling" if self.reader_incomplete.get(thread_id)
@@ -998,8 +1210,9 @@ class Meter:
                 errors.append("本地明细保存或校验失败，请检查数据目录；尚未确认持久保存")
             if saved and saved.get("savedAt") is not None:
                 archives[thread_id] = {"savedAt": saved["savedAt"],
-                                       "source": "archive" if archive_reason else "live",
-                                       "reason": archive_reason}
+                                       "source": "archive" if archive_reason else "compressed" if compressed else "live",
+                                       "reason": archive_reason,
+                                       "continuation": deepcopy(result.get("continuation")) if result else None}
             if result is not None:
                 metadata[thread_id] = result.get("conversationMetadata", {})
                 if archive_reason:
@@ -1021,6 +1234,8 @@ class Meter:
                     turns.append(turn)
                 if result.get("warnings"):
                     errors.extend(result["warnings"])
+                if result.get("continuation", {}).get("status") == "continuation_with_gap":
+                    errors.append("已保留旧明细并接入分页后的新用量；中间历史连续性尚未证实。")
         turns.sort(key=lambda turn: turn.get("startedAt") or 0, reverse=True)
         conversations = conversation_catalog(records, turns, self.titles, metadata)
         self.descendant_roots = {row["id"]: row["lastActivityAt"] for row in conversations
@@ -1038,7 +1253,9 @@ class Meter:
             turn["models"] = turn["pricing"].get("models", [])
         periods = summarize_periods(turns, settings,
                                    reading_incomplete=any(r and not r["complete"] for r in readings.values()),
-                                   read_error_count=len(read_errors) + int(registry_failed))
+                                   read_error_count=len(read_errors) + int(registry_failed) +
+                                   sum(a.get("continuation", {}).get("status") == "continuation_with_gap"
+                                       for a in archives.values() if a.get("continuation")))
         self.history_turns = turns
         self.history_conversation_ids = set(records)
         # Retain one recent record for older tasks so the global history cap
@@ -1057,7 +1274,9 @@ class Meter:
         official_records = list(self.official_usage.items())
         return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
                                "collection": deepcopy(self.collection_status),
-                               "archive": {"status": "error" if archive_errors else "partial" if any(a["reason"] for a in archives.values()) else "ready",
+                               "archive": {"status": "error" if archive_errors else "partial" if any(a["reason"] or
+                                           (a.get("continuation") or {}).get("status") == "continuation_with_gap"
+                                           for a in archives.values()) else "ready",
                                            "savedTasks": len(archives), "retainedTasks": sum(a["source"] == "archive" for a in archives.values()),
                                            "writeErrors": archive_errors,
                                            "lastSavedAt": max((a["savedAt"] for a in archives.values()), default=None)},
@@ -1081,7 +1300,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.15.0"
+    server_version = "CodexUsageMeter/0.16.0"
 
     def log_message(self, *_):
         pass
@@ -1139,7 +1358,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.15.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.16.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1298,7 +1517,7 @@ def serve(folder, port=0, *, launchd_socket=None, idle_timeout=0):
                 except Exception:
                     meter.collection_status.update(status="error", updatedAt=time.time(), errorCode="collector_failed")
                     meter._save_collection_status()
-                server.stop_event.wait(COLLECTION_INTERVAL)
+                server.stop_event.wait(0.25 if meter.collection_status.get("pendingTasks") else COLLECTION_INTERVAL)
         threading.Thread(target=collection_loop, daemon=True).start()
         print(json.dumps(endpoint), flush=True)
         try:
@@ -1463,7 +1682,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.15.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.16.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

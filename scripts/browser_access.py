@@ -27,7 +27,7 @@ RUNTIME_OWNER = ".usage-meter-runtime.json"
 RUNTIME_FILES = (
     "scripts/meter.py", "scripts/usage_log.py", "scripts/pricing.py", "scripts/periods.py",
     "scripts/conversations.py", "scripts/platform_support.py", "scripts/rpc_transport.py", "scripts/official_credits.py",
-    "scripts/descendants.py", "scripts/usage_archive.py",
+    "scripts/descendants.py", "scripts/usage_archive.py", "scripts/compressed_sources.py",
     "scripts/service_lifecycle.py", "scripts/browser_access.py", "web/index.html",
     ".codex-plugin/plugin.json",
 )
@@ -90,6 +90,7 @@ def _runtime_payload(root, *, managed=False):
     legacy_credits = False
     legacy_descendants = False
     legacy_archive = False
+    legacy_compressed = False
     if managed:
         try:
             old_manifest = json.loads(_read_existing(root / ".codex-plugin/plugin.json", 32768) or b"{}")
@@ -98,6 +99,7 @@ def _runtime_payload(root, *, managed=False):
             match = re.fullmatch(r"0\.([0-9]+)\.[0-9]+", old_version)
             legacy_descendants = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 12)
             legacy_archive = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 14)
+            legacy_compressed = old_manifest.get("name") == "codex-usage-meter" and bool(match and int(match[1]) < 16)
         except (ValueError, AttributeError):
             pass
     for name in RUNTIME_FILES:
@@ -110,6 +112,8 @@ def _runtime_payload(root, *, managed=False):
             if managed and legacy_descendants and name == "scripts/descendants.py":
                 continue
             if managed and legacy_archive and name == "scripts/usage_archive.py":
+                continue
+            if managed and legacy_compressed and name == "scripts/compressed_sources.py":
                 continue
             raise RuntimeError("插件运行文件不完整，请重新安装完整源码")
         payload[name] = raw

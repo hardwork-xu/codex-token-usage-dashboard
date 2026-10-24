@@ -340,6 +340,8 @@ class _Turn:
         self.current_context = {"model": None, "serviceTier": None, "pricingMetadataStatus": "unknown"}
         self.interval_context = _PricingMetadata()
         self.interval_context.observe(None, None)
+        self.start_ordinal = None
+        self.end_ordinal = None
         if not started:
             self.mark("未记录到本轮开始。")
 
@@ -357,7 +359,23 @@ class _Turn:
         self.interval_context.observe(self.current_context["model"], self.current_context["serviceTier"],
                                       incomplete=self.current_context["pricingMetadataStatus"] != "known")
 
-    def add(self, amount: dict[str, int], timestamp: float | int | None, *, metadata: dict[str, Any], api_context: str | None = None) -> None:
+    def rebuild_observations(self) -> None:
+        """Recompute aggregates after an explicit receipt corrects its carrier."""
+        rows = self.usage_segments
+        self.tokens = None
+        self.daily_usage = {}
+        self.undated_tokens = _empty_tokens()
+        self.usage_slices = {}
+        self.usage_segments = []
+        self.pricing = _PricingMetadata()
+        for row in rows:
+            metadata = {key: row[key] for key in ("model", "serviceTier", "pricingMetadataStatus")}
+            provenance = {key: value for key, value in row.items()
+                          if key not in {"timestamp", "model", "serviceTier", "pricingMetadataStatus", "apiContext", "tokens"}}
+            self.add(row["tokens"], row["timestamp"], metadata=metadata,
+                     api_context=row["apiContext"], provenance=provenance)
+
+    def add(self, amount: dict[str, int], timestamp: float | int | None, *, metadata: dict[str, Any], api_context: str | None = None, provenance=None) -> None:
         if self.tokens is None:
             self.tokens = dict(amount)
         else:
@@ -381,7 +399,7 @@ class _Turn:
             # Durable observations retain event time and the context of this
             # increment, independently of display dates and later settings.
             self.usage_segments.append({"timestamp": timestamp, **metadata,
-                                        "apiContext": context, "tokens": dict(amount)})
+                                        "apiContext": context, "tokens": dict(amount), **(provenance or {})})
             # Cache-write mapping is not verified. Preserve the boundary so an
             # unsupported call cannot erase the priced subtotal of other calls.
             override_day = None
@@ -408,7 +426,7 @@ class _Turn:
                 if self.status == "running"
                 else "仅统计该任务自身，子代理另列。"
             )
-        return {
+        result = {
             "id": self.id,
             "threadId": self.thread_id,
             "startedAt": self.started_at,
@@ -425,6 +443,11 @@ class _Turn:
                             for (day, override_day, model, tier, status, context, _cache_write), tokens in self.usage_slices.items()],
             **self.pricing.export(),
         }
+        if self.start_ordinal is not None:
+            result["startOrdinal"] = self.start_ordinal
+        if self.end_ordinal is not None:
+            result["endOrdinal"] = self.end_ordinal
+        return result
 
 
 class _Reader:
@@ -447,6 +470,36 @@ class _Reader:
         self.fork_owned_history = False
         self.fork_expected_ancestor: str | None = None
         self.fork_ancestors: set[str] = set()
+        self.source_history = None
+        self.event_ordinal = None
+        self.response_records = {}
+        self.previous_response = None
+        self.pending_response = None
+        self.duplicate_response = None
+        self.supplemented_response_usage = _empty_tokens()
+
+    def observe_history(self, record):
+        """Record only envelope provenance, never transcript or response bodies.
+
+        Paginated logs may expose a later window of the same thread. A matching
+        header alone does not prove continuation: every observed ordinal must
+        increase, and rollback/revert markers make automatic joining ineligible.
+        """
+        ordinal = record.get("ordinal")
+        valid = type(ordinal) is int and 0 <= ordinal < 2**64
+        self.event_ordinal = ordinal if valid else None
+        if self.source_history is None:
+            return
+        if not valid or ordinal <= self.source_history["lastOrdinal"]:
+            self.source_history["eligible"] = False
+        if valid:
+            self.source_history["lastOrdinal"] = max(ordinal, self.source_history["lastOrdinal"])
+        payload = record.get("payload")
+        event = payload.get("type") if isinstance(payload, dict) else None
+        if (record.get("type") in {"rollback", "reverted", "thread_reverted", "thread_rollback", "thread_rolled_back"}
+                or event in {"rollback", "reverted", "thread_reverted", "thread_rollback", "thread_rolled_back", "thread/reverted"}):
+            self.source_history["sawRollback"] = True
+            self.source_history["eligible"] = False
 
     def configure_fork_history(self, record: dict[str, Any], payload: dict[str, Any]) -> None:
         """Honor only an explicit, identity-bound projected-history boundary.
@@ -506,7 +559,9 @@ class _Reader:
         if warning not in self.warnings:
             self.warnings.append(warning)
 
-    def gap(self, reason: str) -> None:
+    def gap(self, reason: str, *, response_gap=True) -> None:
+        if response_gap and self.pending_response is not None:
+            self.pending_response["eligible"] = False
         self.pending_compaction = None
         self.compaction_context_seen = False
         self.baseline_valid = False
@@ -516,6 +571,8 @@ class _Reader:
             self.active.set_context({"model": None, "serviceTier": None, "pricingMetadataStatus": "unknown"})
 
     def compact(self) -> None:
+        if self.pending_response is not None:
+            self.pending_response["compacted"] = True
         # Compression can emit the same lifetime snapshot without resetting it.
         # Delay the gap verdict until a same-turn counter proves continuity.
         if self.active is not None and self.baseline_valid and self.previous_total is not None:
@@ -523,19 +580,22 @@ class _Reader:
                 self.pending_compaction = (self.active.id, dict(self.previous_total))
                 self.compaction_context_seen = False
         else:
-            self.gap("上下文压缩后的统计连续性未获确认，用量可能不完整。")
+            self.gap("上下文压缩后的统计连续性未获确认，用量可能不完整。", response_gap=False)
 
     def flush_compaction(self) -> None:
         if self.pending_compaction is not None:
             fresh = dict(self.active.current_context) if self.active is not None and self.compaction_context_seen else None
-            self.gap("上下文压缩后的统计连续性未获确认，用量可能不完整。")
+            self.gap("上下文压缩后的统计连续性未获确认，用量可能不完整。", response_gap=False)
             if fresh is not None:
                 self.active.set_context(fresh)
 
     def handle(self, record: Any) -> None:
         if not isinstance(record, dict):
+            if self.source_history is not None:
+                self.source_history["eligible"] = False
             self.gap("已跳过无法识别的记录。")
             return
+        self.observe_history(record)
         if self.verified and self.inherited_record(record):
             return
         kind = record.get("type")
@@ -545,6 +605,10 @@ class _Reader:
                 raise UsageLogError("用量记录与指定任务不匹配。")
             if not self.verified:
                 self.configure_fork_history(record, payload)
+                ordinal = record.get("ordinal")
+                if payload.get("history_mode") == "paginated" and type(ordinal) is int and 0 <= ordinal < 2**64:
+                    self.source_history = {"mode": "paginated", "firstOrdinal": ordinal,
+                                           "lastOrdinal": ordinal, "eligible": True, "sawRollback": False}
             self.verified = True
             self.source_metadata = source_metadata(payload)
             return
@@ -553,6 +617,9 @@ class _Reader:
                 raise UsageLogError("任务上下文之前缺少任务身份记录。")
             if isinstance(payload, dict):
                 self.context(payload)
+            return
+        if kind == "token_usage_record":
+            self.response_usage(payload, _timestamp(record.get("timestamp")))
             return
         # Ignore all messages, reasoning, tool bodies, and unknown record types.
         if kind == "compacted":
@@ -594,6 +661,18 @@ class _Reader:
                 if self.pending_compaction is not None and self.active is turn:
                     self.compaction_context_seen = True
             return
+        if (self.active is None and self.source_history is not None
+                and self.source_history["firstOrdinal"] > 0):
+            # A later projection can begin inside a turn. Its explicit context
+            # identifies the owner, but supplies neither a start time nor the
+            # missing cumulative baseline. Keep both limitations visible.
+            turn = _Turn(turn_id, self.thread_id, None, started=False, override_windows=self.override_windows)
+            turn.status = "running"
+            turn.set_context(metadata)
+            turn.reset_interval()
+            self.turns[turn_id] = turn
+            self.active = turn
+            return
         if turn_id not in self.pending_contexts:
             if len(self.pending_contexts) >= MAX_PENDING_CONTEXTS:
                 self.pending_contexts.pop(next(iter(self.pending_contexts)))
@@ -617,6 +696,134 @@ class _Reader:
             # evidence that this interval crossed a model boundary.
             turn.reset_interval()
 
+    def response_usage(self, payload, timestamp):
+        """Keep one response receipt until its legacy/context notification.
+
+        Responses usage is spending; token_count can instead describe a local
+        context estimate after compaction. Never add both carriers. Only exact
+        same-turn pairings or the explicit compaction-estimate pattern below
+        are admitted; an ambiguous carrier remains a visible coverage gap.
+        """
+        if not self.verified or not isinstance(payload, dict):
+            self.warn("响应用量记录缺少有效身份，未用于补计。")
+            return
+        if payload.get("thread_id") != self.thread_id:
+            self.warn("已排除其他任务的响应用量记录。")
+            return
+        response_id = _identifier(payload.get("response_id"))
+        session_id = _identifier(payload.get("session_id"))
+        turn_id = _identifier(payload.get("turn_id"))
+        amount = _coherent(payload.get("usage"))
+        thread_total = _coherent(payload.get("thread_token_usage"))
+        turn_total = _coherent(payload.get("turn_token_usage"))
+        if (response_id is None or session_id is None or turn_id is None
+                or amount is None or thread_total is None or turn_total is None
+                or _bounded_last(amount, thread_total) is None or _bounded_last(amount, turn_total) is None):
+            self.warn("响应用量计数或编号无效，未用于补计。")
+            return
+        turn = self.active
+        if turn is None or turn.id != turn_id:
+            self.warn("响应记录无法归属到进行中轮次，未用于补计。")
+            return
+        signature = (turn_id, session_id, tuple(amount.values()), tuple(thread_total.values()), tuple(turn_total.values()))
+        if response_id in self.response_records:
+            if self.response_records[response_id] != signature:
+                self.warn("同一响应编号出现冲突用量，未重复计入。")
+                if self.pending_response is not None:
+                    self.pending_response["eligible"] = False
+            if self.pending_response is None:
+                self.duplicate_response = {"turnId": turn_id, "tokens": amount}
+            return
+        self.response_records[response_id] = signature
+        # A duplicate without a companion notification cannot claim a later,
+        # independently identified response's notification.
+        self.duplicate_response = None
+        eligible = True
+        continuous = False
+        previous = self.previous_response
+        if previous is not None and previous["sessionId"] == session_id:
+            eligible = _delta(thread_total, previous["threadTotal"]) == amount
+            if previous["turnId"] == turn_id:
+                eligible &= _delta(turn_total, previous["turnTotal"]) == amount
+            continuous = eligible
+        self.previous_response = {"sessionId": session_id, "turnId": turn_id,
+                                  "threadTotal": thread_total, "turnTotal": turn_total}
+        if self.pending_response is not None:
+            self.warn("响应记录与 token 通知尚未唯一配对，未推算重叠用量。")
+            eligible = False
+        if not eligible:
+            turn.mark("响应累计用量连续性未获确认，未推算缺失用量。")
+        self.pending_response = {"id": response_id, "turnId": turn_id, "tokens": amount,
+                                 "timestamp": timestamp, "ordinal": self.event_ordinal,
+                                 "metadata": dict(turn.current_context), "eligible": eligible,
+                                 "continuous": continuous, "compacted": False}
+
+    def exclude_response_overlap(self, amount, last):
+        """Remove previously receipted spending later absorbed by legacy totals.
+
+        A continuous per-response spending counter proves this interval's new
+        response. Only a coherent overlap bounded by already supplemented usage
+        may be removed; the receipt itself and unrelated fallback usage remain.
+        """
+        pending = self.pending_response
+        if (pending is None or not pending["eligible"] or not pending["continuous"]
+                or last != pending["tokens"] or not any(self.supplemented_response_usage.values())):
+            return amount
+        remainder = _delta(amount, last)
+        if remainder is None or not any(remainder.values()):
+            return amount
+        outstanding = self.supplemented_response_usage
+        after_debt = _delta(remainder, outstanding)
+        if after_debt is not None:
+            self.supplemented_response_usage = _empty_tokens()
+            return {key: last[key] + after_debt[key] for key in last}
+        after_overlap = _delta(outstanding, remainder)
+        if after_overlap is not None:
+            self.supplemented_response_usage = after_overlap
+            return dict(last)
+        return amount
+
+    def settle_response(self, turn, raw_last, last, first_segment):
+        pending = self.pending_response
+        if pending is None or turn is None or pending["turnId"] != turn.id:
+            return
+        self.pending_response = None
+        rows = turn.usage_segments[first_segment:]
+        if last == pending["tokens"]:
+            matches = [row for row in rows if row["tokens"] == pending["tokens"]]
+            if len(matches) == 1:
+                # Preserve the carrier's ordinal and time for old archives,
+                # freezing context at the actual response observation. A later
+                # settings change must not relabel an earlier response.
+                row = matches[0]
+                changed = any(row.get(key) != pending["metadata"].get(key)
+                              for key in ("model", "serviceTier", "pricingMetadataStatus"))
+                row.update(pending["metadata"])
+                row["responseId"] = pending["id"]
+                row["responseAccounting"] = "paired"
+                if pending["ordinal"] is not None:
+                    row["responseOrdinal"] = pending["ordinal"]
+                if changed:
+                    turn.rebuild_observations()
+                return
+        context_estimate = (isinstance(raw_last, dict) and type(raw_last.get("total_tokens")) is int
+                            and raw_last["total_tokens"] > 0
+                            and all(type(raw_last.get(source)) is int and raw_last[source] == 0
+                                    for source, _ in _COUNTERS if source != "total_tokens"))
+        if pending["eligible"] and pending["compacted"] and context_estimate and not rows:
+            provenance = {"responseId": pending["id"], "responseAccounting": "compaction"}
+            if pending["ordinal"] is not None:
+                provenance.update(responseOrdinal=pending["ordinal"])
+                if self.source_history is not None:
+                    provenance.update(eventOrdinal=pending["ordinal"], eventPart=0)
+            turn.add(pending["tokens"], pending["timestamp"], metadata=pending["metadata"],
+                     api_context="short" if pending["tokens"]["input"] <= 272_000 else "long",
+                     provenance=provenance)
+            for key, value in pending["tokens"].items():
+                self.supplemented_response_usage[key] += value
+            return
+        turn.mark("响应记录与 token 通知未能安全去重，未推算重叠用量。")
+
     def add_usage(self, turn: _Turn, amount: dict[str, int], timestamp: float | int | None,
                   last: dict[str, int] | None, *, cumulative_delta: bool = False) -> None:
         """Attribute only the evidence available for an accepted increment.
@@ -627,22 +834,33 @@ class _Reader:
         the whole delta retains that uncertain interval attribution. These are
         log-context labels, not independently verified provider routing data.
         """
+        duplicate = self.duplicate_response
+        if duplicate is not None and duplicate["turnId"] == turn.id and last == duplicate["tokens"]:
+            # A replayed response is not new spending even if its companion
+            # legacy cumulative snapshot moved. Keep any independent coherent
+            # remainder, but never add this response's last-usage value twice.
+            amount = _delta(amount, last) or _empty_tokens()
+            last = None
+            turn.mark("已排除重复响应编号的通知；异常累计差额保持待核验。")
         interval = turn.interval_context
         changed = cumulative_delta and (interval.model_changed or interval.tier_changed)
         metadata = interval.export() if changed else turn.current_context
         if changed:
             metadata["pricingMetadataStatus"] = "unknown"
         remainder = _delta(amount, last) if last is not None else None
+        def provenance(part):
+            return ({"eventOrdinal": self.event_ordinal, "eventPart": part}
+                    if self.source_history is not None and self.event_ordinal is not None else None)
         if remainder is not None:
             # last_token_usage is a single-call observation. Keep its context
             # band even when a preceding delta contains multiple missing calls.
             if any(remainder.values()):
-                turn.add(remainder, timestamp, metadata=metadata)
+                turn.add(remainder, timestamp, metadata=metadata, provenance=provenance(0))
             turn.add(last, timestamp, metadata=turn.current_context,
-                     api_context="long" if last["input"] > 272_000 else "short")
+                     api_context="long" if last["input"] > 272_000 else "short", provenance=provenance(1))
         else:
             turn.add(amount, timestamp, metadata=metadata,
-                     api_context="unknown" if last is not None else None)
+                     api_context="unknown" if last is not None else None, provenance=provenance(0))
         if any(amount.values()):
             turn.reset_interval()
 
@@ -656,18 +874,38 @@ class _Reader:
             self.active = None
             return
         if turn_id in self.turns:
+            existing = self.turns[turn_id]
+            if not existing.started and existing.tokens is None and existing.status == "running":
+                existing.started = True
+                existing.started_at = timestamp
+                existing.start_ordinal = self.event_ordinal if self.source_history is not None else None
+                existing.reasons = [reason for reason in existing.reasons if reason != "未记录到本轮开始。"]
+                self.active = existing
+                existing.reset_interval()
             # Replayed starts never clear the baseline or reopen completed turns.
             return
+        if self.pending_response is not None:
+            self.warn("响应记录尚未配对即进入新轮次，保留统计缺口。")
+            if self.active is not None:
+                self.active.mark("响应记录尚未完成去重，统计可能不完整。")
+            self.pending_response = None
         self.flush_compaction()
         if self.active is not None:
             self.active.mark("记录到下一轮开始，但未记录到本轮结束。")
             self.active.status = "interrupted"
             self.active.ended_at = timestamp
         self.active = _Turn(turn_id, self.thread_id, timestamp, override_windows=self.override_windows)
+        if self.source_history is not None:
+            self.active.start_ordinal = self.event_ordinal
         self.attach_context(self.active)
         self.turns[turn_id] = self.active
 
     def finish(self, payload: dict[str, Any], timestamp: float | int | None, *, interrupted: bool) -> None:
+        if self.pending_response is not None and self.pending_response["turnId"] == payload.get("turn_id"):
+            self.warn("响应记录尚未配对即结束轮次，保留统计缺口。")
+            if self.active is not None:
+                self.active.mark("响应记录尚未完成去重，统计可能不完整。")
+            self.pending_response = None
         turn_id = _identifier(payload.get("turn_id"))
         if turn_id is None:
             self.gap("结束事件缺少有效轮次编号，已暂停归属统计。")
@@ -689,6 +927,8 @@ class _Reader:
             self.flush_compaction()
         turn.status = "interrupted" if interrupted else "completed"
         turn.ended_at = timestamp
+        if self.source_history is not None:
+            turn.end_ordinal = self.event_ordinal
         if self.active is turn:
             self.active = None
 
@@ -707,6 +947,7 @@ class _Reader:
             return
 
         turn = self.active
+        first_segment = len(turn.usage_segments) if turn is not None else 0
         explicit_turn = payload.get("turn_id")
         explicit_thread = payload.get("thread_id")
         if explicit_thread is not None and explicit_thread != self.thread_id:
@@ -743,6 +984,7 @@ class _Reader:
         elif self.baseline_valid and self.previous_total is not None:
             amount = _delta(total, self.previous_total)
             if amount is not None:
+                amount = self.exclude_response_overlap(amount, last)
                 self.add_usage(turn, amount, timestamp, last, cumulative_delta=True)
             else:
                 turn.mark("token 计数重置或变化异常，用量可能不完整。")
@@ -760,14 +1002,22 @@ class _Reader:
                     self.add_usage(turn, fallback, timestamp, last)
         self.previous_total = total
         self.baseline_valid = True
+        self.settle_response(turn, info.get("last_token_usage"), last, first_segment)
+        self.duplicate_response = None
 
     def result(self) -> dict[str, Any]:
         if not self.verified:
             raise UsageLogError("用量记录中缺少匹配的任务身份。")
         warnings = list(self.warnings)
+        if self.pending_response is not None:
+            warnings.append("已读取响应计数，正在等待对应通知以核验去重；暂未补计。")
         if self.fork_history_start is not None and not self.fork_owned_history:
             warnings.append("已核实子任务身份，尚未读到自身记录；继承的父任务用量不计入。")
         turns = [turn.export() for turn in self.turns.values()]
+        if self.pending_response is not None:
+            for turn in turns:
+                if turn["id"] == self.pending_response["turnId"]:
+                    turn["quality"] = "partial" if turn["tokens"] is not None else "unavailable"
         if self.pending_compaction is not None:
             note = "正在核验压缩后的统计连续性。"
             warnings.append(note)
@@ -775,7 +1025,7 @@ class _Reader:
                 if turn["id"] == self.pending_compaction[0]:
                     turn["quality"] = "partial" if turn["tokens"] is not None else "unavailable"
                     turn["note"] = note + " " + turn["note"]
-        return {
+        result = {
             "threadId": self.thread_id,
             "identityVerified": self.verified,
             "conversationMetadata": dict(self.source_metadata),
@@ -783,6 +1033,9 @@ class _Reader:
             "warnings": warnings,
             "sourceNote": _SOURCE_NOTE,
         }
+        if self.source_history is not None:
+            result["sourceHistory"] = dict(self.source_history)
+        return result
 
 
 def _ordinary_leaf(details):
@@ -870,6 +1123,8 @@ class UsageLogReader:
             envelope = self._large_record.result()
             self._large_record = None
             if envelope is None:
+                if self._reader.source_history is not None:
+                    self._reader.source_history["eligible"] = False
                 self._reader.gap("已跳过过大的单条记录，无法核实其类型，用量可能不完整。")
             else:
                 try:
@@ -1020,6 +1275,8 @@ class UsageLogReader:
                     try:
                         record = json.loads(raw)
                     except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+                        if self._reader.source_history is not None:
+                            self._reader.source_history["eligible"] = False
                         self._reader.gap("已跳过格式异常的记录，用量可能不完整。")
                         continue
                     try:
