@@ -85,8 +85,10 @@ class IncrementalMeterTests(unittest.TestCase):
         self.assertIsNotNone(state['monitoring']['lastUpdate'])
 
     def test_history_cap_preserves_a_record_for_an_older_selected_task(self):
+        older_path = self.folder / 'older.jsonl'
+        older_path.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'older-thread'}}) + '\n', encoding='utf-8')
         meter.write_json(self.folder / 'registry.json', {
-            'synthetic-thread': {'path': str(self.path)}, 'older-thread': {'path': str(self.path)}})
+            'synthetic-thread': {'path': str(self.path)}, 'older-thread': {'path': str(older_path)}})
         fresh = [{'id': str(i), 'threadId': 'synthetic-thread', 'startedAt': i + 1,
                   'tokens': None, 'quality': 'unavailable'} for i in range(250)]
         older = {'id': 'old', 'threadId': 'older-thread', 'startedAt': 0, 'tokens': None, 'quality': 'unavailable'}

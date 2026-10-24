@@ -126,6 +126,10 @@ class ArchiveIntegrationTests(unittest.TestCase):
 
     def test_invalidation_between_retained_save_and_load_hides_prefix(self):
         self.subject.snapshot()
+        # A changed source exercises the save/load race. An unchanged source
+        # now legitimately returns its identity/hash-verified durable snapshot.
+        with self.path.open('a',encoding='utf-8') as stream:
+            stream.write(json.dumps({'type':'response_item','payload':{'synthetic':'ignored'}})+'\n')
         real_save=self.subject.archive.save
         def save_then_invalidate(thread_id,result):
             result=real_save(thread_id,result)

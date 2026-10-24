@@ -192,12 +192,15 @@ class SnapshotBudgetTests(unittest.TestCase):
         def factory(thread, **options):
             real = usage_log.UsageLogReader(thread, **options)
             def read(path, *, time_budget):
-                calls.append((thread, time_budget))
                 result = real.read(path, time_budget=time_budget)
                 if thread == pending and phase[0] < 2:
                     result["reading"]["complete"] = False
                 return result
             return mock.Mock(read=read)
+        dispatch = subject._read_registered
+        def track_dispatch(thread, path, *, time_budget):
+            calls.append((thread, time_budget))
+            return dispatch(thread, path, time_budget=time_budget)
         from datetime import datetime
         event_day = datetime.fromisoformat("2026-09-21T12:00:00+00:00").astimezone().date()
         aggregate = partial(meter.summarize_periods, now=event_day)
@@ -206,6 +209,7 @@ class SnapshotBudgetTests(unittest.TestCase):
         # deadline yields with an advancing clock. Host scheduling must not
         # decide whether these five-record fixtures finish their first pass.
         with mock.patch.object(meter, "UsageLogReader", side_effect=factory), \
+                mock.patch.object(subject, "_read_registered", side_effect=track_dispatch), \
                 mock.patch.object(usage_log.time, "monotonic", return_value=0), \
                 mock.patch.object(meter, "summarize_periods", side_effect=aggregate):
             for step in range(4):
@@ -236,10 +240,14 @@ class SnapshotBudgetTests(unittest.TestCase):
         def factory(thread, **options):
             real = usage_log.UsageLogReader(thread, **options)
             def read(path, *, time_budget):
-                calls.append((thread, time_budget))
                 return real.read(path, time_budget=time_budget)
             return mock.Mock(read=read)
-        with mock.patch.object(meter, "UsageLogReader", side_effect=factory):
+        dispatch = subject._read_registered
+        def track_dispatch(thread, path, *, time_budget):
+            calls.append((thread, time_budget))
+            return dispatch(thread, path, time_budget=time_budget)
+        with mock.patch.object(meter, "UsageLogReader", side_effect=factory), \
+                mock.patch.object(subject, "_read_registered", side_effect=track_dispatch):
             first = subject.snapshot()
             self.assertEqual(sum(turn["tokens"]["total"] for turn in first["turns"]), 600)
             self.assertFalse(any(subject.reader_incomplete.values()))
@@ -279,6 +287,10 @@ class SnapshotBudgetTests(unittest.TestCase):
         with mock.patch.object(meter, "UsageLogReader", side_effect=factory):
             subject.snapshot()
             fail[0] = True
+            # The fixture must actually change before a new read is needed;
+            # unchanged identity/hash-verified sources now reuse durable data.
+            with Path(registry[broken]["path"]).open("ab") as stream:
+                stream.write(b"\n")
             subject.snapshot()
             self.assertTrue(subject.reader_incomplete[broken])
             calls.clear()
@@ -295,8 +307,7 @@ class SnapshotBudgetTests(unittest.TestCase):
             subject.snapshot()
         self.assertNotIn(broken, subject.cache)
         self.assertNotIn(broken, subject.reader_incomplete)
-        self.assertEqual(set(dict(calls)), set(registry))
-        self.assertTrue(all(budget == .5 for _, budget in calls))
+        self.assertEqual(calls, [])  # remaining unchanged sources use verified archives
 
 
 if __name__ == "__main__":

@@ -151,7 +151,29 @@ class BrowserAccessTests(unittest.TestCase):
         self.assertEqual((self.runtime / "scripts/compressed_sources.py").read_bytes(),
                          (self.source / "scripts/compressed_sources.py").read_bytes())
         self.assertEqual(self.endpoint.read_bytes(), endpoint)
-        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.16.1")
+        self.assertEqual(json.loads(manifest.read_text(encoding="utf-8"))["version"], "0.17.0")
+
+    def test_historical_gap_modules_upgrade_from_owned_016_runtime(self):
+        self.seed_installed()
+        manifest = self.runtime / ".codex-plugin/plugin.json"
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["version"] = "0.16.1"
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        names = ("scripts/historical_gaps.py", "scripts/historical_gap_view.py")
+        for name in names:
+            (self.runtime / name).unlink()
+        endpoint = self.endpoint.read_bytes()
+        self.assertEqual(access.install(self.folder)["port"], 51234)
+        for name in names:
+            self.assertEqual((self.runtime / name).read_bytes(), (self.source / name).read_bytes())
+        self.assertEqual(self.endpoint.read_bytes(), endpoint)
+
+    def test_current_runtime_missing_historical_gap_module_is_rejected(self):
+        self.seed_installed()
+        (self.runtime / "scripts/historical_gap_view.py").unlink()
+        with self.assertRaisesRegex(RuntimeError, "运行文件不完整"):
+            access.install(self.folder)
+        self.assertEqual(self.events, [])
 
     def test_new_runtime_missing_compressed_source_module_is_rejected_before_mutation(self):
         self.seed_installed()

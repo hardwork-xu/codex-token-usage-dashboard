@@ -8,6 +8,7 @@ import contextlib
 from copy import deepcopy
 from datetime import date
 import decimal
+import hashlib
 import json
 import math
 import os
@@ -23,9 +24,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import request, error, parse
 
-from usage_log import read_usage_log, UsageLogReader, reproject_usage
+from usage_log import read_usage_log, UsageLogReader, UsageLogError, reproject_usage
 from usage_archive import UsageArchive
-from compressed_sources import CompressedSourceCache, CompressedSourceError
+from historical_gaps import HistoricalGaps, HistoricalGapError
+from historical_gap_view import decorate_collection, decorate_snapshot
+from compressed_sources import (CompressedSourceCache, CompressedSourceError,
+                                _open_regular, _stamp, MAX_HEADER_BYTES)
 from pricing import estimate_turn
 from official_credits import (account_scope, credits_from_response, credit_view,
                               record_balance, fetch_thread_usage, thread_usage_view)
@@ -48,6 +52,8 @@ QUOTA_STALE_SECONDS = 120
 QUOTA_REFRESH_COOLDOWN = 30
 COLLECTION_INTERVAL = 5
 COLLECTION_BATCH = 64
+COLLECTION_PARSE_SECONDS = 1.0
+COLLECTION_SOURCE_SECONDS = 0.5
 COLLECTION_ACTIVE_GRACE = 3600
 COLLECTION_TAIL_GRACE = 60
 COMPRESSED_READY_BYTES = 256 * 1024 * 1024
@@ -68,6 +74,26 @@ def read_json(path, default):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
+
+
+def read_registry(path):
+    """Only an absent registry is empty; a failed read is unknown state."""
+    try:
+        records = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    return records if isinstance(records, dict) else None
+
+
+def source_error_code(exc):
+    # UsageLogReader deliberately removes filesystem exception text from its
+    # public error, but keeps the original exception as its Python context.
+    if (isinstance(exc, FileNotFoundError) or isinstance(exc, UsageLogError)
+            and isinstance(exc.__context__, FileNotFoundError)):
+        return "source_missing"
+    return exc.code if isinstance(exc, CompressedSourceError) else "source_unreadable"
 
 
 def write_json(path, value):
@@ -206,7 +232,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.16.1"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.17.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -406,6 +432,16 @@ class Meter:
         self.folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.cache = {}
         self.archive = UsageArchive(folder)
+        self.historical_gaps = HistoricalGaps(self.folder.resolve())
+        self.source_observations = read_json(folder / "source-observations.json", {})
+        if not isinstance(self.source_observations, dict):
+            self.source_observations = {}
+        self.source_observations_dirty = False
+        self.source_read_stamps = {}
+        self.source_stamp_cache = {}
+        self.source_algorithm = hashlib.sha256(b"".join(
+            (Path(__file__).parent / filename).read_bytes()
+            for filename in ("usage_log.py", "usage_archive.py"))).hexdigest()
         self.compressed_cache = CompressedSourceCache(folder / "compressed-source-cache")
         self.compressed_observations = read_json(folder / "compressed-observations.json", {})
         if not isinstance(self.compressed_observations, dict):
@@ -468,10 +504,17 @@ class Meter:
             stamp = ("compressed", json.dumps(compressed, sort_keys=True, separators=(",", ":")))
             return stamp, Path(str(path) + ".zst").stat().st_mtime
         info = path.lstat()
-        return (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns), info.st_mtime
+        handle_change = None
+        # Windows path ctime may be creation time. Do not skip a same-size
+        # overwrite merely because its original mtime was restored.
+        with contextlib.suppress(OSError, CompressedSourceError):
+            with _open_regular(path) as stream:
+                handle_change = os.fstat(stream.fileno()).st_ctime_ns
+        return (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                info.st_ctime_ns, handle_change), info.st_mtime
 
     def _read_registered(self, thread_id, path, time_budget):
-        """Reuse durable numeric observations of an unchanged compressed source.
+        """Reuse durable observations only for an unchanged, verified source.
 
         The source fingerprint and archive hash must both match. Otherwise the
         exact sibling is decoded and independently checked by the normal reader.
@@ -480,6 +523,26 @@ class Meter:
         do not rewrite an unchanged observation or claim a newer save time.
         """
         compressed = self.compressed_cache.inspect(thread_id, path) if path.suffix == ".jsonl" else None
+        if compressed is None:
+            stamp = self._plain_source_stamp(thread_id, path)
+            previous_stamp = self.source_read_stamps.get(thread_id)
+            if (stamp is not None and previous_stamp is not None and stamp != previous_stamp
+                    and stamp.get("size") == previous_stamp.get("size")
+                    and stamp.get("mtimeNs") == previous_stamp.get("mtimeNs")):
+                # Include handle change time on Windows, where restoring mtime
+                # can otherwise hide a same-size overwrite from the reader.
+                self.cache.pop(thread_id, None)
+            self.source_read_stamps[thread_id] = stamp
+            observed = self.source_observations.get(thread_id)
+            if (stamp is not None and isinstance(observed, dict) and observed.get("sourceStamp") == stamp
+                    and observed.get("algorithm") == self.source_algorithm
+                    and observed.get("windows") == self.reader_override_windows):
+                saved = self.archive.load(thread_id)
+                if (saved is not None and saved["contentHash"] == observed.get("contentHash")
+                        and saved["result"].get("identityVerified") is True
+                        and saved["result"].get("reading", {}).get("complete") is True):
+                    outcome = {"savedAt": saved["savedAt"], "retained": False, "unchanged": True}
+                    return reproject_usage(saved["result"], self.reader_override_windows or {}), None, None, outcome
         observed = self.compressed_observations.get(thread_id)
         if compressed is not None and isinstance(observed, dict) and observed.get("sourceStamp") == compressed:
             saved = self.archive.load(thread_id)
@@ -501,6 +564,75 @@ class Meter:
         if reader is None:
             reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=self.reader_override_windows or {})
         return reader.read(target, time_budget=time_budget), reader, compressed, None
+
+    def _plain_source_stamp(self, thread_id, path):
+        """Bind a normal source to its identity, stat and bounded byte anchors.
+
+        No raw source content or path is persisted. The open-file change time
+        is kept separately: Windows 3.12+ may expose creation time through
+        lstat but metadata-change time through fstat. Append and any observed
+        rewrite invalidate reuse and return to the original incremental reader.
+        """
+        if path.suffix.lower() != ".jsonl":
+            return None
+        try:
+            with _open_regular(path) as stream:
+                before = os.fstat(stream.fileno())
+                metadata = {**_stamp(before), "handleChangeNs": before.st_ctime_ns,
+                            "pathHash": hashlib.sha256(os.path.normcase(str(path.absolute())).encode()).hexdigest()}
+                cached = self.source_stamp_cache.get(thread_id)
+                if cached is not None and all(cached.get(key) == value for key, value in metadata.items()):
+                    return dict(cached)
+                first = stream.readline(MAX_HEADER_BYTES + 1)
+                if len(first) > MAX_HEADER_BYTES or not first.endswith(b"\n"):
+                    return None
+                try:
+                    header = json.loads(first)
+                except (ValueError, UnicodeError):
+                    return None
+                if not isinstance(header, dict) or header.get("type") != "session_meta":
+                    return None
+                payload = header.get("payload")
+                if not isinstance(payload, dict) or payload.get("id") != thread_id:
+                    raise CompressedSourceError("identity_mismatch")
+                stream.seek(max(0, before.st_size - 4096))
+                tail = stream.read(4096)
+                after = os.fstat(stream.fileno())
+                current = path.lstat()
+                if (_stamp(before) != _stamp(after) or _stamp(before) != _stamp(current)
+                        or before.st_ctime_ns != after.st_ctime_ns):
+                    return None
+                stamp = {**metadata, "headerHash": hashlib.sha256(first).hexdigest(),
+                         "tailHash": hashlib.sha256(tail).hexdigest()}
+                self.source_stamp_cache[thread_id] = stamp
+                return dict(stamp)
+        except CompressedSourceError as exc:
+            if exc.code == "identity_mismatch":
+                raise
+            return None
+        except (OSError, TypeError, ValueError):
+            return None
+
+    def _remember_plain_source(self, thread_id, path, result, outcome):
+        if (result.get("reading", {}).get("complete") is not True or outcome.get("retained")
+                or result.get("identityVerified") is not True):
+            return
+        before = self.source_read_stamps.get(thread_id)
+        if before is None or before != self._plain_source_stamp(thread_id, path):
+            return
+        saved = self.archive.load(thread_id)
+        if saved is None or saved["result"].get("reading", {}).get("complete") is not True:
+            return
+        observation = {"sourceStamp": before, "contentHash": saved["contentHash"],
+                       "algorithm": self.source_algorithm, "windows": deepcopy(self.reader_override_windows)}
+        if self.source_observations.get(thread_id) != observation:
+            self.source_observations[thread_id] = observation
+            self.source_observations_dirty = True
+
+    def _save_source_observations(self):
+        if self.source_observations_dirty:
+            write_json(self.folder / "source-observations.json", self.source_observations)
+            self.source_observations_dirty = False
 
     def _prepare_compressed_source(self):
         """Decode at most one cold source outside the shared snapshot lock.
@@ -588,7 +720,9 @@ class Meter:
             self.compressed_prepare_lock.release()
 
     def _remember_compressed(self, thread_id, path, result, outcome, compressed):
-        if compressed is None or result.get("reading", {}).get("complete") is not True:
+        if compressed is None:
+            return self._remember_plain_source(thread_id, path, result, outcome)
+        if result.get("reading", {}).get("complete") is not True:
             return
         if outcome.get("retained"):
             # Keep the current conflicting numeric observation available for
@@ -643,11 +777,12 @@ class Meter:
         with self.snapshot_lock:
             now, monotonic = time.time(), time.monotonic()
             registry_path = self.folder / "registry.json"
-            records = read_json(registry_path, None)
-            if records is None and not registry_path.exists():
-                records = {}
-            if not isinstance(records, dict):
-                self.collection_status.update(status="error", updatedAt=now, errorCode="registry_invalid")
+            records = read_registry(registry_path)
+            if records is None:
+                self.collection_status.update(status="error", updatedAt=now, errorCode="registry_invalid",
+                                              activeStatus="error", activeErrorCode="registry_invalid",
+                                              historicalGapTasks=0,
+                                              activeUnreadableTasks=self.collection_status.get("unreadableTasks", 0))
                 self._save_collection_status()
                 return deepcopy(self.collection_status)
             windows = self.settings()["speedOverrideWindows"]
@@ -667,7 +802,7 @@ class Meter:
                     stamp, modified_at = self._source_info(thread_id, path)
                 except (OSError, KeyError, TypeError, ValueError) as exc:
                     state.update(unreadable=True, pending=False, running=False, activeUntil=0, saved=False,
-                                 sourceError=exc.code if isinstance(exc, CompressedSourceError) else None)
+                                 sourceError=source_error_code(exc))
                     continue
                 if (state.get("saved") and state.get("stamp") == stamp
                         and not state.get("pending")):
@@ -680,8 +815,17 @@ class Meter:
                 start = self.collection_cursor % len(candidates)
                 candidates = candidates[start:] + candidates[:start]
                 self.collection_cursor = (start + min(COLLECTION_BATCH, len(candidates))) % len(candidates)
-            for thread_id, path, stamp, modified_at in candidates[:COLLECTION_BATCH]:
-                state = self.collection_sources[thread_id]
+            work = candidates[:COLLECTION_BATCH]
+            parse_budget = min(COLLECTION_SOURCE_SECONDS,
+                               max(0.025, COLLECTION_PARSE_SECONDS / max(1, len(work))))
+        # Do not hold the global snapshot lock across a whole backlog batch.
+        # UI requests may run between sources; each read retains its original
+        # byte/record limits and the per-source soft parsing deadline.
+        for thread_id, path, stamp, modified_at in work:
+            with self.snapshot_lock:
+                if windows != self.reader_override_windows:
+                    break  # A settings update invalidated this pass.
+                state = self.collection_sources.setdefault(thread_id, {})
                 reader = self.cache.get(thread_id)
                 previous_stamp = state.get("stamp")
                 if (previous_stamp is not None and previous_stamp != stamp
@@ -695,7 +839,7 @@ class Meter:
                     reader = self.cache[thread_id] = UsageLogReader(thread_id, override_windows=windows)
                 read_succeeded = False
                 try:
-                    result, reader, compressed, archived = self._read_registered(thread_id, path, time_budget=0.025)
+                    result, reader, compressed, archived = self._read_registered(thread_id, path, time_budget=parse_budget)
                     read_succeeded = True
                     reading = result.get("reading", {})
                     complete = reading.get("complete") is True
@@ -749,14 +893,15 @@ class Meter:
                         except Exception:
                             state["writeError"] = True
                         state.update(unreadable=True, pending=False, running=False, activeUntil=0,
-                                     stamp=stamp, retryAt=monotonic + 60)
+                                     stamp=stamp, retryAt=monotonic + 60, sourceError="identity_mismatch")
                     elif read_succeeded:
                         # The verified read succeeded, but archiving failed.
                         state.update(writeError=True, retryAt=0)
                     else:
                         state.update(unreadable=True, pending=False, running=False, activeUntil=0,
                                      stamp=stamp, retryAt=monotonic + 60,
-                                     sourceError=exc.code if isinstance(exc, CompressedSourceError) else None)
+                                     sourceError=source_error_code(exc))
+        with self.snapshot_lock:
             states = list(self.collection_sources.values())
             self.collection_active_until = max((state.get("activeUntil", 0) for state in states), default=0)
             pending = sum(bool(state.get("pending")) or not state for state in states)
@@ -778,6 +923,9 @@ class Meter:
                 self.collection_status["savedTasks"] = self.archive.stats()["savedThreads"]
             except Exception:
                 self.collection_status.update(status="error", errorCode="archive_write_failed")
+            with contextlib.suppress(OSError, ValueError):
+                self._save_source_observations()
+            decorate_collection(self.collection_status, self._historical_gap_view(records), self.collection_sources)
             self._save_collection_status()
             return deepcopy(self.collection_status)
 
@@ -787,7 +935,31 @@ class Meter:
         try:
             write_json(self.folder / "collection-status.json", self.collection_status)
         except Exception:
-            self.collection_status.update(status="error", errorCode="status_write_failed")
+            self.collection_status.update(status="error", errorCode="status_write_failed",
+                                          activeStatus="error", activeErrorCode="status_write_failed")
+
+    def _historical_gap_view(self, records):
+        try:
+            return self.historical_gaps.reconcile(records, self.archive)
+        except HistoricalGapError as exc:
+            return {"status": "error", "errorCode": exc.code, "tasks": [], "candidateThreadIds": [],
+                    "acknowledgedTasks": None, "savedTasks": None, "unknownCostTasks": None,
+                    "unreadableTasks": None, "updatedAt": None}
+
+    def acknowledge_historical_gaps(self, value):
+        if not isinstance(value, dict) or set(value) != {"threadIds"}:
+            raise ValueError("历史缺口请求字段无效")
+        with self.snapshot_lock, locked(self.folder):
+            records = read_json(self.folder / "registry.json", None)
+            try:
+                view = self.historical_gaps.acknowledge(records, value["threadIds"], self.archive)
+            except HistoricalGapError as exc:
+                reasons = {"source_not_missing": "原日志或压缩日志仍存在，不能作为历史缺口归档",
+                           "ledger_invalid": "历史缺口记录格式无效，请先核对本地记录",
+                           "selection_invalid": "请选择 1 到 100 个已登记任务",
+                           "registration_invalid": "所选任务的登记信息无效"}
+                raise ValueError(reasons.get(exc.code, "历史缺口未能核验或保存，未确认归档成功")) from None
+            return {"ok": True, "historicalGaps": view}
 
     def _load_descendant_progress(self):
         """Load only scheduling metadata, never treat cached roots as proof."""
@@ -1057,7 +1229,8 @@ class Meter:
 
     def _snapshot_input_stamp(self):
         result = []
-        for path in (self.folder / "settings.json", self.folder / "registry.json", self.archive.path):
+        for path in (self.folder / "settings.json", self.folder / "registry.json", self.archive.path,
+                     self.folder / "historical-gaps.json"):
             try:
                 info = path.stat()
                 result.append((info.st_ino, info.st_size, info.st_mtime_ns))
@@ -1127,14 +1300,12 @@ class Meter:
     def _snapshot(self):
         self.last_client = time.time()
         registry_path = self.folder / "registry.json"
-        records = read_json(registry_path, None)
-        registry_failed = (records is None and registry_path.exists()) or (records is not None and not isinstance(records, dict))
+        records = read_registry(registry_path)
+        registry_failed = records is None
         turns, errors = [], []
         if registry_failed:
             records = {}
             errors.append("本地登记记录格式无效")
-        elif records is None:
-            records = {}
         settings = self.settings()
         windows = settings["speedOverrideWindows"]
         if windows != self.reader_override_windows:
@@ -1144,7 +1315,7 @@ class Meter:
             self.reader_incomplete.clear()
             self.collection_sources.clear()
             self.reader_override_windows = deepcopy(windows)
-        readings, read_errors, successful_reads, metadata = {}, {}, 0, {}
+        readings, read_errors, read_error_codes, successful_reads, metadata = {}, {}, {}, 0, {}
         archives, archive_errors = {}, 0
         self.cache = {key: reader for key, reader in self.cache.items() if key in records}
         self.reader_incomplete = {key: value for key, value in self.reader_incomplete.items() if key in records}
@@ -1172,6 +1343,9 @@ class Meter:
             except Exception as exc:
                 reader = self.cache.get(thread_id)
                 source_rejected = isinstance(exc, CompressedSourceError) and exc.code == "identity_mismatch"
+                read_error_codes[thread_id] = ("identity_mismatch" if source_rejected
+                                              or reader is not None and reader.identity_rejected
+                                              else source_error_code(exc))
                 self.reader_incomplete[thread_id] = True
                 # Do not display stale last-good token totals as a new successful read.
                 # Keep the reader's rejection state: a foreign session found in
@@ -1179,7 +1353,7 @@ class Meter:
                 if isinstance(exc, CompressedSourceError) and exc.code == "decoder_unavailable":
                     read_errors[thread_id] = "日志已压缩；需要 Python 3.14、zstandard 模块或 zstd 工具才能继续读取。"
                 elif isinstance(exc, CompressedSourceError):
-                    read_errors[thread_id] = "这段对话的压缩日志未通过读取或校验，已保留此前的有效明细。"
+                    read_errors[thread_id] = "这段对话的本地日志未通过读取或校验，已保留此前的有效明细。"
                 else:
                     read_errors[thread_id] = "这段对话的记录暂时无法读取，请稍后刷新。"
                 errors.append(read_errors[thread_id])
@@ -1244,6 +1418,8 @@ class Meter:
                     errors.extend(result["warnings"])
                 if result.get("continuation", {}).get("status") == "continuation_with_gap":
                     errors.append("已保留旧明细并接入分页后的新用量；中间历史连续性尚未证实。")
+        with contextlib.suppress(OSError, ValueError):
+            self._save_source_observations()
         turns.sort(key=lambda turn: turn.get("startedAt") or 0, reverse=True)
         conversations = conversation_catalog(records, turns, self.titles, metadata)
         self.descendant_roots = {row["id"]: row["lastActivityAt"] for row in conversations
@@ -1251,6 +1427,7 @@ class Meter:
         for conversation in conversations:
             conversation["reading"] = readings.get(conversation["id"])
             conversation["readError"] = read_errors.get(conversation["id"])
+            conversation["readErrorCode"] = read_error_codes.get(conversation["id"])
             conversation["archive"] = archives.get(conversation["id"])
             if conversation["reading"] and not conversation["reading"]["complete"]:
                 # A historical prefix may end in an old unfinished turn.
@@ -1280,7 +1457,7 @@ class Meter:
                    "等待登记任务。安装后在 Codex 中审阅并信任本插件 Hooks，新问题才会自动登记。")
         quota_snapshot = deepcopy(self.quota)
         official_records = list(self.official_usage.items())
-        return {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
+        snapshot = {"monitoring": {"status": status, "message": message, "lastUpdate": time.time() if successful_reads else None,
                                "collection": deepcopy(self.collection_status),
                                "archive": {"status": "error" if archive_errors else "partial" if any(a["reason"] or
                                            (a.get("continuation") or {}).get("status") == "continuation_with_gap"
@@ -1305,10 +1482,15 @@ class Meter:
                 "turns": visible_turns, "history": {"total": len(turns), "returned": len(visible_turns)},
                 "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
                 "fxReference": {**FX_REFERENCE, "customized": any(decimal.Decimal(settings["exchangeRates"][key]) != decimal.Decimal(EXCHANGE_RATES[key]) for key in EXCHANGE_RATES)}}
+        # Unknown registry contents must not be reconciled as an empty registry:
+        # doing so would durably revoke historical acknowledgements and report
+        # an empty, healthy dashboard after a read or format failure.
+        gap_view = self._historical_gap_view(None if registry_failed else records)
+        return decorate_snapshot(snapshot, gap_view, self.collection_sources)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.16.1"
+    server_version = "CodexUsageMeter/0.17.0"
 
     def log_message(self, *_):
         pass
@@ -1366,7 +1548,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.16.1", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.17.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1379,16 +1561,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/refresh":
             return self.respond({"ok": True, "refresh": self.server.meter.start_refresh()})
-        if self.path not in ("/api/settings", "/api/conversation-label", "/api/official-usage-refresh"):
+        if self.path not in ("/api/settings", "/api/conversation-label", "/api/official-usage-refresh", "/api/historical-gaps"):
             return self.respond({"error": "不存在"}, 404)
         try:
             size = int(self.headers.get("Content-Length", "0"))
             # A complete, bounded year of date-specific speed confirmations
             # exceeds the original 4 KiB settings payload limit.
-            limit = 131072 if self.path == "/api/settings" else 4096
+            limit = 131072 if self.path == "/api/settings" else 16384 if self.path == "/api/historical-gaps" else 4096
             if size < 1 or size > limit or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 raise ValueError("请求格式无效")
             value = json.loads(self.rfile.read(size))
+            if self.path == "/api/historical-gaps":
+                return self.respond(self.server.meter.acknowledge_historical_gaps(value))
             if self.path == "/api/official-usage-refresh":
                 if not isinstance(value, dict) or set(value) != {"threadId"}:
                     raise ValueError("同步请求字段无效")
@@ -1690,7 +1874,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.16.1"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.17.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
