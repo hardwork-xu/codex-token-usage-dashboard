@@ -198,9 +198,9 @@ class SnapshotBudgetTests(unittest.TestCase):
                 return result
             return mock.Mock(read=read)
         dispatch = subject._read_registered
-        def track_dispatch(thread, path, *, time_budget):
+        def track_dispatch(thread, path, *, time_budget, **options):
             calls.append((thread, time_budget))
-            return dispatch(thread, path, time_budget=time_budget)
+            return dispatch(thread, path, time_budget=time_budget, **options)
         from datetime import datetime
         event_day = datetime.fromisoformat("2026-09-21T12:00:00+00:00").astimezone().date()
         aggregate = partial(meter.summarize_periods, now=event_day)
@@ -243,9 +243,9 @@ class SnapshotBudgetTests(unittest.TestCase):
                 return real.read(path, time_budget=time_budget)
             return mock.Mock(read=read)
         dispatch = subject._read_registered
-        def track_dispatch(thread, path, *, time_budget):
+        def track_dispatch(thread, path, *, time_budget, **options):
             calls.append((thread, time_budget))
-            return dispatch(thread, path, time_budget=time_budget)
+            return dispatch(thread, path, time_budget=time_budget, **options)
         with mock.patch.object(meter, "UsageLogReader", side_effect=factory), \
                 mock.patch.object(subject, "_read_registered", side_effect=track_dispatch):
             first = subject.snapshot()

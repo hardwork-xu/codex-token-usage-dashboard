@@ -25,7 +25,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import request, error, parse
 
-from usage_log import read_usage_log, UsageLogReader, UsageLogError, reproject_usage
+from usage_log import read_usage_log, UsageLogReader, UsageLogError
+from usage_projection import reproject_usage
 from usage_archive import UsageArchive
 from historical_gaps import HistoricalGaps, HistoricalGapError
 from historical_gap_view import decorate_collection, decorate_snapshot
@@ -36,6 +37,7 @@ from pricing import estimate_turn
 from official_credits import (account_scope, credits_from_response, credit_view,
                               record_balance, fetch_thread_usage, thread_usage_view)
 from periods import summarize_periods
+from analytics import build_analytics
 from conversations import fetch_conversation_titles, normalize_title, display_ids
 from descendants import discover_descendants
 from platform_support import default_data_dir, codex_command, file_lock, is_windows, subprocess_options
@@ -265,7 +267,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.18.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.19.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -486,6 +488,7 @@ class Meter:
         self.compressed_prepare_cursor = 0
         self.reader_incomplete = {}
         self.reader_override_windows = None
+        self.projection_cache = {}
         self.snapshot_lock = threading.Lock()
         self.snapshot_generation = 0
         self.last_snapshot = None
@@ -550,7 +553,22 @@ class Meter:
         return (str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
                 info.st_ctime_ns, handle_change), info.st_mtime
 
-    def _read_registered(self, thread_id, path, time_budget):
+    def _project_saved(self, saved):
+        """Cache calendar summaries only after the archive has validated its hash.
+
+        Detailed segments remain in the durable archive. They are not needed by
+        dashboard consumers, and copying them on every refresh is expensive.
+        """
+        thread_id = saved["result"]["threadId"]
+        zone = (os.environ.get("TZ"), time.tzname, time.timezone, time.altzone)
+        key = (saved["contentHash"], json.dumps(self.reader_override_windows or {}, sort_keys=True), zone)
+        previous = self.projection_cache.get(thread_id)
+        if previous is None or previous[0] != key:
+            projected = reproject_usage(saved["result"], self.reader_override_windows or {}, include_segments=False)
+            self.projection_cache[thread_id] = (key, projected)
+        return deepcopy(self.projection_cache[thread_id][1])
+
+    def _read_registered(self, thread_id, path, time_budget, *, summary_only=False):
         """Reuse durable observations only for an unchanged, verified source.
 
         The source fingerprint and archive hash must both match. Otherwise the
@@ -579,13 +597,15 @@ class Meter:
                         and saved["result"].get("identityVerified") is True
                         and saved["result"].get("reading", {}).get("complete") is True):
                     outcome = {"savedAt": saved["savedAt"], "retained": False, "unchanged": True}
-                    return reproject_usage(saved["result"], self.reader_override_windows or {}), None, None, outcome
+                    projected = self._project_saved(saved) if summary_only else reproject_usage(saved["result"], self.reader_override_windows or {})
+                    return projected, None, None, outcome
         observed = self.compressed_observations.get(thread_id)
         if compressed is not None and isinstance(observed, dict) and observed.get("sourceStamp") == compressed:
             saved = self.archive.load(thread_id)
             if saved is not None and saved["contentHash"] == observed.get("contentHash"):
                 outcome = {"savedAt": saved["savedAt"], "retained": False, "unchanged": True}
-                return reproject_usage(saved["result"], self.reader_override_windows or {}), None, compressed, outcome
+                projected = self._project_saved(saved) if summary_only else reproject_usage(saved["result"], self.reader_override_windows or {})
+                return projected, None, compressed, outcome
         target = path
         if compressed is not None:
             failure = self.compressed_failures.get(thread_id)
@@ -953,7 +973,7 @@ class Meter:
             decoder_unavailable = sum(state.get("sourceError") == "decoder_unavailable" for state in states)
             self.collection_status.update(
                 status="error" if write_errors else "partial" if unreadable or changed_sources or continuation_gaps else "collecting" if pending else "ready",
-                updatedAt=now, registeredTasks=len(records), pendingTasks=pending,
+                updatedAt=time.time(), registeredTasks=len(records), pendingTasks=pending,
                 runningTasks=sum(bool(state.get("running")) for state in states),
                 unreadableTasks=unreadable, writeErrors=write_errors,
                 continuationGapTasks=continuation_gaps, decoderUnavailableTasks=decoder_unavailable,
@@ -967,6 +987,7 @@ class Meter:
             with contextlib.suppress(OSError, ValueError):
                 self._save_source_observations()
             decorate_collection(self.collection_status, self._historical_gap_view(records), self.collection_sources)
+            self.collection_status["updatedAt"] = time.time()
             self._save_collection_status()
             return deepcopy(self.collection_status)
 
@@ -1403,6 +1424,7 @@ class Meter:
             errors.append("本地登记记录格式无效")
         settings = self.settings()
         windows = settings["speedOverrideWindows"]
+        self.projection_cache = {key: value for key, value in self.projection_cache.items() if key in records}
         if windows != self.reader_override_windows:
             # Day declarations have fixed UTC boundaries. Rebuild their slice
             # attribution when edited; never reuse labels from an old window.
@@ -1426,7 +1448,7 @@ class Meter:
             source_rejected = False
             try:
                 path = Path(record["path"])
-                result, reader, compressed, archived = self._read_registered(thread_id, path, time_budget=weights[thread_id] / total_weight)
+                result, reader, compressed, archived = self._read_registered(thread_id, path, time_budget=weights[thread_id] / total_weight, summary_only=True)
                 reading = result.get("reading")
                 self.reader_incomplete[thread_id] = not (isinstance(reading, dict) and reading.get("complete") is True)
                 successful_reads += 1
@@ -1466,13 +1488,13 @@ class Meter:
                     if outcome.get("merged"):
                         saved = self.archive.load(thread_id)
                         if saved:
-                            result = reproject_usage(saved["result"], windows)
+                            result = self._project_saved(saved)
                     if outcome.get("retained"):
                         saved = self.archive.load(thread_id)
                         archive_reason = ("backfilling" if self.reader_incomplete.get(thread_id)
                                           else "source_changed")
                         if saved:
-                            result = reproject_usage(saved["result"], windows)
+                            result = self._project_saved(saved)
                         else:
                             result = None
                             read_errors[thread_id] = "这段对话的保存记录已失效，完整重新核验前不使用其用量。"
@@ -1480,7 +1502,7 @@ class Meter:
                 elif result is None or result.get("identityVerified") is not True:
                     saved = self.archive.load(thread_id)
                     if saved:
-                        result = reproject_usage(saved["result"], windows)
+                        result = self._project_saved(saved)
                         archive_reason = "source_unavailable" if thread_id in read_errors else "backfilling"
             except Exception:
                 archive_errors += 1
@@ -1536,6 +1558,11 @@ class Meter:
                                    read_error_count=len(read_errors) + int(registry_failed) +
                                    sum(a.get("continuation", {}).get("status") == "continuation_with_gap"
                                        for a in archives.values() if a.get("continuation")))
+        analytics = build_analytics(turns, settings,
+                                    reading_incomplete=any(r and not r["complete"] for r in readings.values()),
+                                    read_error_count=len(read_errors) + int(registry_failed) +
+                                    sum(a.get("continuation", {}).get("status") == "continuation_with_gap"
+                                        for a in archives.values() if a.get("continuation")))
         self.history_turns = turns
         self.history_conversation_ids = set(records)
         # Retain one recent record for older tasks so the global history cap
@@ -1575,7 +1602,8 @@ class Meter:
                     if thread_id in records and quota_snapshot.get("accountScope") is not None
                     and record.get("accountScope") == quota_snapshot.get("accountScope")},
                 "turns": visible_turns, "history": {"total": len(turns), "returned": len(visible_turns)},
-                "conversations": conversations, "periods": periods, "settings": settings, "csrfToken": self.csrf,
+                "conversations": conversations, "periods": periods, "analytics": analytics,
+                "settings": settings, "csrfToken": self.csrf,
                 "fxReference": {**FX_REFERENCE, "customized": any(decimal.Decimal(settings["exchangeRates"][key]) != decimal.Decimal(EXCHANGE_RATES[key]) for key in EXCHANGE_RATES)}}
         # Unknown registry contents must not be reconciled as an empty registry:
         # doing so would durably revoke historical acknowledgements and report
@@ -1586,7 +1614,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.18.0"
+    server_version = "CodexUsageMeter/0.19.0"
 
     def log_message(self, *_):
         pass
@@ -1652,7 +1680,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.18.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.19.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1980,7 +2008,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.18.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.19.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
