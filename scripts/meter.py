@@ -267,7 +267,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.19.0"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.19.1"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -1614,7 +1614,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.19.0"
+    server_version = "CodexUsageMeter/0.19.1"
 
     def log_message(self, *_):
         pass
@@ -1680,7 +1680,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.19.0", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.19.1", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -1873,7 +1873,11 @@ def local_get(url):
     if not local_url(url):
         raise RuntimeError("本地面板地址无效")
     opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
-    with opener.open(url, timeout=2) as response:
+    # Full ledger summaries include validated archives and per-model pricing.
+    # Keep health probes short, but allow the same bounded wait as the UI for
+    # a legitimate summary instead of reporting a healthy service unavailable.
+    timeout = 30 if parse.urlsplit(url).path == "/api/state" else 2
+    with opener.open(url, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -2008,7 +2012,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.19.0"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.19.1"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
