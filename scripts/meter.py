@@ -36,7 +36,7 @@ from compressed_sources import (CompressedSourceCache, CompressedSourceError,
 from pricing import estimate_turn
 from official_credits import (account_scope, credits_from_response, credit_view,
                               record_balance, fetch_thread_usage, thread_usage_view)
-from periods import summarize_periods
+from periods import summarize_periods, validated_subscription_period, select_subscription_turns
 from analytics import build_analytics
 from conversations import fetch_conversation_titles, normalize_title, display_ids
 from descendants import discover_descendants
@@ -51,7 +51,8 @@ FX_REFERENCE = {"sourceUrl": "https://www.ecb.europa.eu/stats/policy_and_exchang
 DEFAULT_SETTINGS = {"currencyName": "美元", "currencySymbol": "$", "ratePerMillion": None,
                     "pricingMode": "api", "usdPerCredit": "0.04", "currencyPerUsd": "1", "speedMode": "auto",
                     "speedOverrides": {}, "speedOverrideWindows": {},
-                    "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None}
+                    "currencyCode": "USD", "exchangeRates": EXCHANGE_RATES, "subscriptionRenewalDay": None,
+                    "subscriptionPeriod": None}
 QUOTA_STALE_SECONDS = 120
 QUOTA_REFRESH_COOLDOWN = 30
 COLLECTION_INTERVAL = 5
@@ -267,7 +268,7 @@ def fetch_quota():
     try:
         with JsonRpcProcess([*codex_command(), "app-server", "--stdio"], timeout=20) as rpc:
             rpc.send({"id": 1, "method": "initialize", "params": {
-                "clientInfo": {"name": "codex_usage_meter", "version": "0.19.1"}}})
+                "clientInfo": {"name": "codex_usage_meter", "version": "0.20.0"}}})
             initialized = False
             for response in rpc.responses():
                 request_id = response.get("id")
@@ -382,6 +383,7 @@ def validate_settings(value):
     if renewal_day is not None and (type(renewal_day) is not int or not 1 <= renewal_day <= 31):
         raise ValueError("订阅续费日应为 1 到 31 的整数，或留空")
     out["subscriptionRenewalDay"] = renewal_day
+    out["subscriptionPeriod"] = validated_subscription_period(value.get("subscriptionPeriod"))
     for key, choices in (("pricingMode", ("api", "official", "custom")), ("speedMode", ("auto", "standard", "fast", "ultrafast"))):
         selected = value.get(key, DEFAULT_SETTINGS[key])
         if selected not in choices:
@@ -489,11 +491,13 @@ class Meter:
         self.reader_incomplete = {}
         self.reader_override_windows = None
         self.projection_cache = {}
+        self.active_subscription_period = None
         self.snapshot_lock = threading.Lock()
         self.snapshot_generation = 0
         self.last_snapshot = None
         self.last_snapshot_inputs = None
         self.history_turns = []
+        self.history_subscription_selections = {}
         self.history_conversation_ids = set()
         self.quota = read_json(folder / "quota.json", {"updatedAt": None, "error": "尚未查询额度", "buckets": []})
         if not isinstance(self.quota, dict):
@@ -561,10 +565,15 @@ class Meter:
         """
         thread_id = saved["result"]["threadId"]
         zone = (os.environ.get("TZ"), time.tzname, time.timezone, time.altzone)
-        key = (saved["contentHash"], json.dumps(self.reader_override_windows or {}, sort_keys=True), zone)
+        key = (saved["contentHash"], json.dumps(self.reader_override_windows or {}, sort_keys=True), zone,
+               json.dumps(self.active_subscription_period, sort_keys=True))
         previous = self.projection_cache.get(thread_id)
         if previous is None or previous[0] != key:
             projected = reproject_usage(saved["result"], self.reader_override_windows or {}, include_segments=False)
+            if self.active_subscription_period:
+                projected["_subscriptionSelection"] = select_subscription_turns(
+                    saved["result"]["turns"], {"subscriptionPeriod": self.active_subscription_period,
+                                              "speedOverrideWindows": self.reader_override_windows or {}})
             self.projection_cache[thread_id] = (key, projected)
         return deepcopy(self.projection_cache[thread_id][1])
 
@@ -1036,7 +1045,8 @@ class Meter:
                 raise ValueError("本机日志尚未核对完或保存异常，请待采集就绪后再记录")
             try:
                 report = build_allocation(self.history_turns, snapshot["conversations"],
-                                          snapshot["settings"], now=datetime.now().astimezone())
+                                          snapshot["settings"], now=datetime.now().astimezone(),
+                                          subscription_selections=self.history_subscription_selections)
                 with locked(self.folder, "device-allocation"):
                     write_json(self.folder / "device-allocation.json", report)
                     saved, failure = self.device_allocation_view()
@@ -1423,6 +1433,9 @@ class Meter:
             records = {}
             errors.append("本地登记记录格式无效")
         settings = self.settings()
+        self.active_subscription_period = settings.get("subscriptionPeriod")
+        subscription_selection = select_subscription_turns([], settings)
+        subscription_by_thread = {}
         windows = settings["speedOverrideWindows"]
         self.projection_cache = {key: value for key, value in self.projection_cache.items() if key in records}
         if windows != self.reader_override_windows:
@@ -1513,6 +1526,20 @@ class Meter:
                                        "reason": archive_reason,
                                        "continuation": deepcopy(result.get("continuation")) if result else None}
             if result is not None:
+                if subscription_selection is not None:
+                    selected = result.get("_subscriptionSelection")
+                    if selected is None:
+                        selected = select_subscription_turns(result["turns"], settings)
+                    for selected_turn in selected["turns"]:
+                        selected_turn["sourceAvailability"] = "archive" if archive_reason else "live"
+                    if archive_reason:
+                        for selected_turn in selected["turns"]:
+                            selected_turn["readingIncomplete"] = True
+                            selected_turn["quality"] = "partial"
+                    subscription_selection["turns"].extend(selected["turns"])
+                    subscription_selection["unassignedTokens"] += selected["unassignedTokens"]
+                    subscription_selection["coverageGap"] |= selected["coverageGap"]
+                    subscription_by_thread[thread_id] = selected
                 metadata[thread_id] = result.get("conversationMetadata", {})
                 if archive_reason:
                     errors.append("部分用量来自已保存明细，原日志尚未重新核对")
@@ -1554,16 +1581,19 @@ class Meter:
             turn["amount"] = turn["pricing"]["amount"]
             turn["models"] = turn["pricing"].get("models", [])
         periods = summarize_periods(turns, settings,
+                                   subscription_selection=subscription_selection,
                                    reading_incomplete=any(r and not r["complete"] for r in readings.values()),
                                    read_error_count=len(read_errors) + int(registry_failed) +
                                    sum(a.get("continuation", {}).get("status") == "continuation_with_gap"
                                        for a in archives.values() if a.get("continuation")))
         analytics = build_analytics(turns, settings,
+                                    subscription_selection=subscription_selection,
                                     reading_incomplete=any(r and not r["complete"] for r in readings.values()),
                                     read_error_count=len(read_errors) + int(registry_failed) +
                                     sum(a.get("continuation", {}).get("status") == "continuation_with_gap"
                                         for a in archives.values() if a.get("continuation")))
         self.history_turns = turns
+        self.history_subscription_selections = subscription_by_thread
         self.history_conversation_ids = set(records)
         # Retain one recent record for older tasks so the global history cap
         # cannot make an explicitly selected registered task appear empty.
@@ -1614,7 +1644,7 @@ class Meter:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CodexUsageMeter/0.19.1"
+    server_version = "CodexUsageMeter/0.20.0"
 
     def log_message(self, *_):
         pass
@@ -1680,7 +1710,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.meter.refresh_descendants, daemon=True).start()
             return self.respond(snapshot)
         if self.path == "/health":
-            return self.respond({"app": "codex-usage-meter", "version": "0.19.1", "pid": os.getpid()})
+            return self.respond({"app": "codex-usage-meter", "version": "0.20.0", "pid": os.getpid()})
         self.respond({"error": "不存在"}, 404)
 
     def do_POST(self):
@@ -2012,7 +2042,7 @@ def mcp(folder):
                 continue
             method = req.get("method")
             if method == "initialize":
-                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.19.1"}}
+                result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}}, "serverInfo": {"name": "codex-usage-meter", "version": "0.20.0"}}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

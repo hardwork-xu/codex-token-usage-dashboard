@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import re
 
-from periods import summarize_periods
+from periods import summarize_periods, validated_subscription_period, select_subscription_turns
 from pricing import estimate_turn
 
 
@@ -61,8 +61,12 @@ def _api_settings(settings):
     renewal = settings.get("subscriptionRenewalDay")
     if type(renewal) is not int or not 1 <= renewal <= 31:
         renewal = None
+    try:
+        interval = validated_subscription_period(settings.get("subscriptionPeriod"))
+    except (ValueError, TypeError, OverflowError):
+        _fail("allocation_invalid")
     return {"pricingMode": "api", "currencyPerUsd": "1", "speedMode": "standard",
-            "subscriptionRenewalDay": renewal}
+            "subscriptionRenewalDay": renewal, "subscriptionPeriod": interval}
 
 
 def pricing_fingerprint(settings):
@@ -136,7 +140,74 @@ def _period_row(period, unknown_turns):
             "unknownTurnCount": unknown_turns, "partial": period["partial"]}
 
 
-def build_allocation(turns, conversations, settings, now):
+def _subscription_groups(grouped, options, selections):
+    """Partition private preclipped observations without exposing raw events.
+
+    Normal service snapshots provide one exact selection per registered thread.
+    Direct callers can omit these and let the period summarizer use whatever
+    timestamp evidence their turns contain, including conservative daily fallback.
+    """
+    if selections is None or options["subscriptionPeriod"] is None:
+        return dict.fromkeys(_GROUPS, None)
+    if (not isinstance(selections, dict) or len(selections) > 100_000
+            or any(not isinstance(thread, str) or not isinstance(selection, dict)
+                   for thread, selection in selections.items())):
+        _fail()
+    empty = select_subscription_turns([], options)
+    result = {group: deepcopy(empty) for group in _GROUPS}
+    originals = {(turn["threadId"], turn["id"]): turn for turn in grouped["total"]}
+    by_thread, memberships = {}, {}
+    for group in ("local", "other"):
+        for turn in grouped[group]:
+            thread = turn["threadId"]
+            by_thread.setdefault(thread, []).append(turn)
+            memberships.setdefault(thread, set()).add(group)
+    if any(thread not in by_thread and (selection.get("turns") or selection.get("unassignedTokens"))
+           for thread, selection in selections.items()):
+        _fail()
+    for thread, values in by_thread.items():
+        groups = memberships[thread]
+        if len(groups) != 1:
+            # A thread-level excluded counter cannot be assigned between mixed
+            # turn-level evidence states without guessing.
+            _fail("collection_not_ready")
+        group = next(iter(groups))
+        selection = selections.get(thread)
+        if selection is None:
+            selection = select_subscription_turns(values, options)
+        if (not isinstance(selection, dict)
+                or not isinstance(selection.get("turns"), list)
+                or not _integer(selection.get("unassignedTokens"))
+                or type(selection.get("coverageGap")) is not bool
+                or any(selection.get(key) != empty[key] for key in
+                       ("startAt", "endAt", "timeZone", "startDate", "endDate", "source"))):
+            _fail()
+        known_total = sum((turn.get("tokens") or {}).get("total", 0) for turn in values)
+        if selection["unassignedTokens"] > known_total:
+            _fail()
+        seen, selected_total = set(), 0
+        for turn in selection["turns"]:
+            if not isinstance(turn, dict):
+                _fail()
+            key = (turn.get("threadId"), turn.get("id"))
+            original = originals.get(key)
+            tokens = _tokens(turn.get("tokens"))
+            if (key in seen or key[0] != thread or original is None or tokens is None
+                    or any(tokens[field] > (original.get("tokens") or {}).get(field, 0)
+                           for field in _FIELDS)):
+                _fail()
+            seen.add(key)
+            selected_total += tokens["total"]
+        if selected_total + selection["unassignedTokens"] > known_total:
+            _fail()
+        for target in (result["total"], result[group]):
+            target["turns"].extend(selection["turns"])
+            target["unassignedTokens"] += selection["unassignedTokens"]
+            target["coverageGap"] |= selection["coverageGap"]
+    return result
+
+
+def build_allocation(turns, conversations, settings, now, *, subscription_selections=None):
     """Classify a complete supplied ledger once; never scan or persist sources.
 
     The caller must additionally reject global archive/collection write errors;
@@ -181,16 +252,21 @@ def build_allocation(turns, conversations, settings, now):
     local_threads = {turn["threadId"] for turn in grouped["local"]}
     unknown_by_group = {"total": len(unknown_tasks), "local": len(unknown_tasks & local_threads)}
     unknown_by_group["other"] = unknown_by_group["total"] - unknown_by_group["local"]
+    selections = _subscription_groups(grouped, options, subscription_selections)
     periods = {key: {} for key in _PERIODS}
     with localcontext() as context:
         context.prec = 100
         for group, values in grouped.items():
             summary = summarize_periods(values, options, now=now,
-                                        read_error_count=unknown_by_group[group])
+                                        read_error_count=unknown_by_group[group],
+                                        subscription_selection=selections[group])
             unknown_turns = sum(turn.get("tokens") is None for turn in values)
             for key in ("today", "subscription"):
                 item = summary[key]
                 periods[key].update(startDate=item["startDate"], endDate=item["endDate"])
+                if item.get("source") == "custom":
+                    periods[key].update({name: item[name] for name in
+                                         ("source", "startAt", "endAt", "timeZone")})
                 periods[key][group] = _period_row(item, unknown_turns)
             periods["allTime"].update(startDate=None, endDate=None)
             periods["allTime"][group] = _all_time(values, options, unknown_tasks=unknown_by_group[group],
@@ -252,7 +328,22 @@ def validate_allocation(value):
     with localcontext() as context:
         context.prec = 100
         for key, period in value["periods"].items():
-            if not isinstance(period, dict) or set(period) != {"startDate", "endDate", *_GROUPS}:
+            if not isinstance(period, dict):
+                _fail()
+            custom_fields = {"source", "startAt", "endAt", "timeZone"}
+            expected = {"startDate", "endDate", *_GROUPS}
+            custom = key == "subscription" and bool(set(period) & custom_fields)
+            if custom:
+                expected |= custom_fields
+                try:
+                    normalized = validated_subscription_period({name: period.get(name)
+                        for name in ("startAt", "endAt", "timeZone")})
+                except (ValueError, TypeError, OverflowError):
+                    _fail()
+                if (period.get("source") != "custom" or normalized is None
+                        or any(period.get(name) != normalized[name] for name in normalized)):
+                    _fail()
+            if set(period) != expected:
                 _fail()
             start, end = period["startDate"], period["endDate"]
             if key == "allTime":
@@ -299,8 +390,16 @@ def validate_allocation(value):
                 _fail()
             for key in ("today", "subscription"):
                 row = value["periods"][key][group]
-                if (row["unknownTurnCount"] != lifetime[group]["unknownTurnCount"]
-                        or row["unassignedTokens"] != lifetime[group]["unassignedTokens"]):
+                if row["unknownTurnCount"] != lifetime[group]["unknownTurnCount"]:
+                    _fail()
+                if key == "subscription" and value["periods"][key].get("source") == "custom":
+                    # A boundary-day bucket without event timestamps cannot be
+                    # split at the selected hour. It remains excluded and adds
+                    # uncertainty here, while lifetime counters stay intact.
+                    if (row["unassignedTokens"] < lifetime[group]["unassignedTokens"]
+                            or all_tokens is not None and row["unassignedTokens"] > all_tokens["total"]):
+                        _fail()
+                elif row["unassignedTokens"] != lifetime[group]["unassignedTokens"]:
                     _fail()
                 if row["tokens"] is not None and any(
                         row["tokens"][field] > (all_tokens or {}).get(field, 0) for field in _FIELDS):

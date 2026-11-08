@@ -39,6 +39,7 @@
     .official-metrics>div{min-width:0}.official-primary{font-size:clamp(23px,3.2vw,30px);line-height:1.35}.official-primary .official-credit-unit{display:block;font-size:12px;font-weight:400;letter-spacing:0;color:var(--muted);margin-top:3px}.official-money-primary,.official-money-secondary{display:block}.official-money-secondary{font-size:12px;font-weight:400;color:var(--muted);letter-spacing:0}.official-equivalent{white-space:normal}.official-money-primary,.official-money-secondary{white-space:nowrap}.official-change .official-credit-unit{font-size:12px;color:var(--muted)}
     .period-credit,.credit-value,.model-credit-line,.credit-cell{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:4px;row-gap:3px;line-height:1.6;letter-spacing:0}.period-credit{font-size:13px;margin-top:8px;color:var(--teal)}.credit-value{font-size:19px;margin-top:11px;color:var(--teal)}.local-credit-number{white-space:nowrap;max-width:100%;overflow-x:auto}.local-credit-label{font-size:10px;font-weight:400;white-space:nowrap;color:var(--muted)}.local-credit-partial{font-size:10px;color:var(--amber)}.model-credit-line{font-size:12px;margin-top:5px;color:var(--teal)}.credit-coverage{font-size:10px;line-height:1.7;color:var(--amber);white-space:normal;margin-top:4px}.credit-coverage:empty{display:none}.credit-estimate-scope{margin:12px 3px 0}.credit-cell{margin-top:9px;white-space:normal}.credit-value.attention,.period-credit.attention,.model-credit-line.attention,.credit-cell.attention{color:var(--amber)}
     .credit-scenario-settings{margin-top:20px;padding-top:17px;border-top:1px solid var(--line)}
+    .subscription-period-fields{grid-template-columns:minmax(0,1fr)}.subscription-period-fields .field{min-width:0}.subscription-period-fields input{min-width:0}
     .local-credit-basis,.credit-speed-summary{flex-basis:100%;font-size:10px;font-weight:400;line-height:1.7;color:var(--muted);white-space:normal}.local-credit-basis{color:var(--teal)}.credit-billing{font-size:11px;line-height:1.8;color:var(--ink);margin-top:8px}.today-observation{margin-top:14px;padding:12px 13px;border:1px solid var(--line);background:#fafbf7;border-radius:10px}.today-observation .card-top{align-items:flex-start;gap:8px;flex-wrap:wrap}.today-observation h4{font-size:11px;font-weight:600;margin:0}.today-observation .badge{font-size:9px}.observation-change{font-size:20px;line-height:1.5;white-space:normal;margin-top:7px}.observation-change .official-credit-unit{font-size:10px;color:var(--muted)}.today-observation .official-credit-number{white-space:nowrap}.speed-overrides{border:0;border-top:1px solid var(--line);margin:17px 0 0;padding:14px 0 0;min-width:0}.speed-overrides legend{font-size:12px;padding:0 6px 0 0}.speed-overrides .form-row{margin-bottom:10px}.credit-override-list{list-style:none;margin:13px 0 0;padding:0}.credit-override-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;padding:8px 0;border-top:1px solid var(--line)}.credit-override-list button{font-size:10px}.credit-override-empty{font-size:11px;color:var(--muted)}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 
@@ -111,7 +112,7 @@
         </div>
         <div id="credit-scenario-settings" class="field credit-scenario-settings"><label for="credit-speed">缺少速度记录时的默认估算</label><select id="credit-speed" name="speedMode" aria-describedby="credit-speed-hint"><option value="auto">Auto：未知速度取估算中点</option><option value="standard">Standard：默认场景</option><option value="fast">Fast：默认场景</option><option value="ultrafast">UltraFast：默认场景（支持的模型）</option></select><p id="credit-speed-hint" class="field-hint">可信日志速度优先，其次采用下面的日期确认，最后才使用这个默认场景。只改变本地 Credits 估算，不修改 Codex 的实际速度、官方记录或余额。API 始终按 Standard；Ultra 思考强度与速度档位不同。</p><fieldset class="speed-overrides"><legend>按日期确认缺失的速度</legend><div class="form-row"><div class="field"><label for="credit-override-date">日期</label><input id="credit-override-date" type="date" aria-describedby="credit-override-hint"></div><div class="field"><label for="credit-override-speed">这一天使用的速度</label><select id="credit-override-speed"><option value="standard">Standard</option><option value="fast">Fast</option><option value="ultrafast">UltraFast</option></select></div></div><button id="add-credit-override" class="button" type="button">按当前时区添加 / 重新确认</button><p id="credit-override-zone" class="field-hint">再次确认已有日期也会重新绑定当前时区。</p><p id="credit-override-hint" class="field-hint">仅影响所填日期中缺少可信速度记录的用量，属于用户确认，不是自动检测。一天内混用 Standard / Fast 时，不应统一确认整天。添加或更新会把所选日期按当前浏览器时区绑定为固定时间窗口；旅行换时区不会改变已保存窗口。再次更新同一天会重新绑定当前时区。旧记录若未绑定时区，不会自动猜测。更改随“保存设置”一起保存。</p><p id="credit-override-error" class="dialog-error" role="alert" hidden></p><ul id="credit-override-list" class="credit-override-list"></ul></fieldset></div>
         <div id="custom-settings" class="settings-section" hidden><div class="field"><label for="rate-per-million">每 100 万 Token 的折算值</label><input id="rate-per-million" name="ratePerMillion" type="text" inputmode="decimal" placeholder="留空则关闭自定义金额显示" autocomplete="off" aria-describedby="rate-hint"><p id="rate-hint" class="field-hint">按总 Token 统一折算，不区分模型、缓存或输出费率。数值使用上方的货币单位。</p></div></div>
-        <div class="renewal-settings"><label for="subscription-renewal-day">每月续订日</label><input id="subscription-renewal-day" name="subscriptionRenewalDay" type="text" inputmode="numeric" maxlength="2" placeholder="填写 1 至 31，留空则不统计订阅周期" autocomplete="off" aria-describedby="renewal-hint"><p id="renewal-hint" class="field-hint">填写订阅每月续订的日期。周期从当天开始，到下次续订日前结束；当月没有这一天时按月末计算。这里只调整统计范围，不会修改你的订阅。</p></div>
+        <div class="renewal-settings"><label for="subscription-renewal-day">每月续订日</label><input id="subscription-renewal-day" name="subscriptionRenewalDay" type="text" inputmode="numeric" maxlength="2" placeholder="填写 1 至 31，留空则不统计订阅周期" autocomplete="off" aria-describedby="renewal-hint"><p id="renewal-hint" class="field-hint">未指定下面的起止时间时，按续订日当天 00:00 至下次续订日 00:00 统计；当月没有这一天时按月末计算。这里只调整统计范围，不会修改你的订阅。</p><fieldset class="speed-overrides"><legend>指定订阅周期（可选）</legend><div class="form-row subscription-period-fields"><div class="field"><label for="subscription-period-start">开始时间 · 北京时间</label><input id="subscription-period-start" type="datetime-local" step="1" aria-describedby="subscription-period-hint"></div><div class="field"><label for="subscription-period-end">结束时间 · 北京时间</label><input id="subscription-period-end" type="datetime-local" step="1" aria-describedby="subscription-period-hint"></div></div><p id="subscription-period-hint" class="field-hint">北京时间（UTC+08）。包含开始时刻，不含结束时刻；仅统计已保存的用量，不会自动滚动到下个月。两项都留空可恢复按每月续订日统计。</p></fieldset></div>
         <div id="calculation-note" class="calculation-note">API 等价费用 = 各模型的普通输入、缓存输入、输出分别乘以 API 单价后相加，再换算货币。不使用每 Credit 的换算比例。</div>
         <p id="settings-error" class="dialog-error" role="alert" hidden></p>
       </div>
@@ -470,11 +471,12 @@
   }
   function restoreModelFocus(key) { if (key) [...document.querySelectorAll('[data-model-details]')].find(summary => summary.dataset.modelDetails === key)?.focus({preventScroll:true}); }
   function renderPeriods() {
-    const periods = state?.periods, renewalDay = validRenewalDay(state?.settings?.subscriptionRenewalDay) ? state.settings.subscriptionRenewalDay : null;
+    const periods = state?.periods, renewalDay = validRenewalDay(state?.settings?.subscriptionRenewalDay) ? state.settings.subscriptionRenewalDay : null, customPeriod = copySubscriptionPeriod(state?.settings?.subscriptionPeriod);
+    text('subscription-heading',customPeriod ? '指定订阅周期' : '当前订阅周期');
     for (const key of ['today','subscription']) {
-      const period = periods?.[key], needsConfiguration = key === 'subscription' && (period?.status === 'needs_configuration' || !period && renewalDay === null), unavailable = !period || period.status === 'needs_configuration', unpriced = validNumber(period?.unpricedTokens) && period.unpricedTokens > 0 || validNumber(period?.unpricedTurnCount) && period.unpricedTurnCount > 0, partial = !!period?.partial || period?.status === 'partial' || unpriced;
+      const period = periods?.[key], needsConfiguration = key === 'subscription' && (period?.status === 'needs_configuration' || !period && renewalDay === null && !customPeriod), unavailable = !period || period.status === 'needs_configuration', unpriced = validNumber(period?.unpricedTokens) && period.unpricedTokens > 0 || validNumber(period?.unpricedTurnCount) && period.unpricedTurnCount > 0, partial = !!period?.partial || period?.status === 'partial' || unpriced;
       const badge = $(key + '-badge'); badge.textContent = needsConfiguration ? '待设置' : !period ? '等待汇总' : period.status === 'unavailable' ? validNumber(period.tokens?.total) ? '暂无估价' : '汇总不可用' : partial ? '部分统计' : '已记录'; badge.className = 'badge' + (needsConfiguration || unavailable || partial || period?.status === 'unavailable' ? ' partial' : ' good');
-      text(key + '-date',needsConfiguration ? '设置每月续订日后显示统计范围' : period?.startDate && period?.endDate ? key === 'today' ? period.startDate + ' · 本地日期' : period.startDate + ' 至 ' + period.endDate + '（不含结束日）' : '统计日期暂不可用');
+      text(key + '-date',needsConfiguration ? '设置续订日或指定周期后显示统计范围' : key === 'subscription' && exactPeriodLabel(period) ? exactPeriodLabel(period) : period?.startDate && period?.endDate ? key === 'today' ? period.startDate + ' · 本地日期' : period.startDate + ' 至 ' + period.endDate + '（不含结束日）' : '统计日期暂不可用');
       text(key + '-tokens',unavailable ? '—' : fmt(period.tokens?.total));
       const amount = $(key + '-amount'); amount.textContent = unavailable ? '—' : amountText({amount:period.amount}); amount.title = !unavailable && rawDecimal(period.amount) !== null ? '估算值 ' + amountText({amount:period.amount},true) : '';
       text(key + '-money-label',apiMode() ? 'API 等价费用（估算）' + (unpriced ? ' · 可计价部分' : '') : officialMode() ? '各模型本地 Credit 费用估算合计' : '自定义折算价值 · 估算');
@@ -499,7 +501,7 @@
     }
     const unassigned = validNumber(periods?.unassignedTokens) ? periods.unassignedTokens : Math.max(0,...['today','subscription'].map(key => validNumber(periods?.[key]?.unassignedTokens) ? periods[key].unassignedTokens : 0));
     $('period-unassigned').hidden = unassigned === 0; text('period-unassigned',unassigned > 0 ? '另有 ' + fmt(unassigned) + ' Tokens 缺少可用的事件日期，未计入以上周期。' : '');
-    text('configure-renewal',renewalDay === null ? '设置每月续订日 ↗' : '每月 ' + renewalDay + ' 日续订 · 修改 ↗'); $('configure-renewal').disabled = !connected;
+    text('configure-renewal',copySubscriptionPeriod(state?.settings?.subscriptionPeriod) ? '指定订阅周期 · 修改 ↗' : renewalDay === null ? '设置订阅周期 ↗' : '每月 ' + renewalDay + ' 日续订 · 修改 ↗'); $('configure-renewal').disabled = !connected;
   }
   function usesMidpoint(turn) { const p = turn?.pricing; return ['midpoint','api_context_midpoint'].includes(p?.estimateBasis) || apiMode() && validNumber(p?.apiContextUncertainTokens) && p.apiContextUncertainTokens > 0 || (rawDecimal(p?.credits) !== null && rawDecimal(p?.creditsMax) !== null && rawDecimal(p.credits) !== rawDecimal(p.creditsMax)); }
   function pricingCaption(turn) {
@@ -846,7 +848,7 @@
     $('device-allocation-range').value = deviceAllocationRange;
     text('device-allocation-time',snapshot ? (connected ? '冻结于 ' : '上次保存快照 · ') + fullDateText(Date.parse(snapshot.capturedAt)/1000) + '。后续用量未自动计入；以下范围以记录时为准。' : '尚未记录设备归类快照。核对后保存当前已有总量的分类结果。');
     const configured = range?.total?.tokens !== null && !!range?.total?.tokens;
-    text('device-allocation-dates',!snapshot ? '' : deviceAllocationRange === 'allTime' ? '全部已记录 · 包括可保留的历史数值' : range?.startDate && range?.endDate ? range.startDate + ' 至 ' + range.endDate + '（不含结束日）' : '此快照未提供该范围的有效日期或订阅期设置。');
+    text('device-allocation-dates',!snapshot ? '' : deviceAllocationRange === 'allTime' ? '全部已记录 · 包括可保留的历史数值' : exactPeriodLabel(range) || (range?.startDate && range?.endDate ? range.startDate + ' 至 ' + range.endDate + '（不含结束日）' : '此快照未提供该范围的有效日期或订阅期设置。'));
     rows.replaceChildren();
     for (const [key,label] of [['total','总量'],['local','本机日志可核对'],['other','其他设备（人工归类差额）']]) {
       const value = range?.[key], row = node('tr',''), name = node('td','',label), tokens = node('td','mono',fmt(value?.tokens?.total)), money = allocationMoney(value?.usd,fx), amount = node('td','mono',money === null ? '—' : fx.symbol + decimalText(money,true));
@@ -911,7 +913,7 @@
     const priced = total !== null && unpriced !== null && unpriced <= total ? total - unpriced : null, cost = analyticsNumeric(usd);
     text('analytics-unit-cost',priced > 0 && cost !== null ? analyticsMoney((cost / priced * 1e6).toFixed(8)) : '—');
     text('analytics-unit-note',unpriced > 0 ? '仅以可计价 Tokens 为分母' : '按本时段模型与缓存组合');
-    text('analytics-dates',p?.startDate && p?.endDate ? p.startDate + ' → ' + p.endDate + '（不含结束日）' : p?.status === 'needs_configuration' ? '请在折算设置中填写每月续订日' : '等待本机统计范围');
+    text('analytics-dates',exactPeriodLabel(p) || (p?.startDate && p?.endDate ? p.startDate + ' → ' + p.endDate + '（不含结束日）' : p?.status === 'needs_configuration' ? '请在折算设置中填写续订日或指定周期' : '等待本机统计范围'));
     text('analytics-rate-note','API Standard · ' + (typeof data?.rateDate === 'string' ? '费率日期 ' + data.rateDate : '费率日期尚未提供') + ' · 显示 ' + fx.code + (fx.fallback ? '（当前自定义单位不用于 API 分析）' : '') + '。沿用本机记录的模型与缓存，不含工具附加费和税费。' + (typeof data?.roundingNote === 'string' ? ' ' + data.roundingNote : ''));
     const days = !unavailable && Array.isArray(p.daily) ? p.daily.filter(day => day && typeof day.date === 'string') : [], chart = $('analytics-chart'), axis = $('analytics-axis'); chart.replaceChildren(); axis.replaceChildren();
     const values = days.map(day => analyticsMetric === 'tokens' ? validNumber(day.tokens?.total) ? day.tokens.total : null : analyticsNumeric(day.usd)), max = Math.max(0,...values.filter(v => v !== null));
@@ -959,13 +961,13 @@
     if (!connected && data) notes.push('连接中断，显示上次收到的数据');
     if (!data) notes.push('分析等待服务提供；不会从表格当前页推算完整用量');
     else if (p?.status === 'needs_configuration') notes.push('设置每月续订日后显示订阅期分析');
-    else { notes.push(p?.partial ? '仅含已记录部分，采集与历史覆盖详情见下方' : '已记录数据汇总，不代表完整账号用量'); if (unpriced > 0) notes.push(fmt(unpriced) + ' Tokens 未计价'); if (p?.unassignedTokens > 0) notes.push(fmt(p.unassignedTokens) + ' Tokens 缺少日期，未分配到本时段'); if (p?.apiContextUncertainTokens > 0) notes.push(fmt(p.apiContextUncertainTokens) + ' Tokens 的上下文档位不确定，费用采用估算'); }
+    else { notes.push(p?.partial ? '仅含已记录部分，采集与历史覆盖详情见下方' : '已记录数据汇总，不代表完整账号用量'); if (unpriced > 0) notes.push(fmt(unpriced) + ' Tokens 未计价'); if (p?.unassignedTokens > 0) notes.push(fmt(p.unassignedTokens) + (exactPeriodLabel(p) ? ' Tokens 缺少足够精确的事件时间，未分配到本时段' : ' Tokens 缺少日期，未分配到本时段')); if (p?.apiContextUncertainTokens > 0) notes.push(fmt(p.apiContextUncertainTokens) + ' Tokens 的上下文档位不确定，费用采用估算'); }
     text('analytics-quality',notes.join(' · ') + '。'); $('analytics-quality').classList.toggle('attention',!connected || !data || !!p?.partial || unavailable);
   }
   function renderAnalyticsChats(period,unavailable,focusedChat) {
     const body=$('analytics-chats-rows');body.replaceChildren();
     const rows=!unavailable && Array.isArray(period?.topConversations)?period.topConversations.filter(row=>row && typeof row.threadId==='string').slice(0,8):[], catalog=new Map((Array.isArray(state?.conversations)?state.conversations:[]).filter(row=>row && typeof row.id==='string').map(row=>[row.id,row]));
-    const periodLabel={today:'今天',week:'近 7 天',month:'近 30 天',subscription:'当前订阅周期'}[analyticsPeriod];
+    const periodLabel={today:'今天',week:'近 7 天',month:'近 30 天',subscription:exactPeriodLabel(period) ? '指定订阅周期' : '当前订阅周期'}[analyticsPeriod];
     text('analytics-chats-scope',periodLabel+' · 按已知 API 费用排序'+(period?.partial?' · 部分记录':''));
     $('analytics-chats-table-wrap').hidden=!rows.length;$('analytics-chats-empty').hidden=!!rows.length;
     text('analytics-chats-empty',period?.status==='needs_configuration'?'设置续订日后显示对话排名。':!period?.topConversations?'对话排名等待分析数据。':'本时段暂无已记录的对话用量。');
@@ -1027,7 +1029,38 @@
   function showToast(message) { text('toast',message); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; },3500); }
   function fullSettings() {
     const s = state?.settings || {};
-    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:['standard','fast','ultrafast','auto'].includes(s.speedMode) ? s.speedMode : 'auto',speedOverrides:s.speedOverrides && typeof s.speedOverrides === 'object' && !Array.isArray(s.speedOverrides) ? {...s.speedOverrides} : {},speedOverrideWindows:copySpeedWindows(s.speedOverrideWindows),subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
+    return {currencyCode:currencyCode(),currencyName:s.currencyName || '美元',currencySymbol:s.currencySymbol ?? '$',ratePerMillion:s.ratePerMillion ?? null,pricingMode:s.pricingMode || 'api',usdPerCredit:s.usdPerCredit || '0.04',currencyPerUsd:s.currencyPerUsd || '1',speedMode:['standard','fast','ultrafast','auto'].includes(s.speedMode) ? s.speedMode : 'auto',speedOverrides:s.speedOverrides && typeof s.speedOverrides === 'object' && !Array.isArray(s.speedOverrides) ? {...s.speedOverrides} : {},speedOverrideWindows:copySpeedWindows(s.speedOverrideWindows),subscriptionRenewalDay:validRenewalDay(s.subscriptionRenewalDay) ? s.subscriptionRenewalDay : null,subscriptionPeriod:copySubscriptionPeriod(s.subscriptionPeriod),exchangeRates:{CNY:s.exchangeRates?.CNY || '',USD:'1',HKD:s.exchangeRates?.HKD || ''}};
+  }
+  function copySubscriptionPeriod(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.timeZone !== 'string') return null;
+    const aware = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+    if (![value.startAt,value.endAt].every(v => typeof v === 'string' && aware.test(v) && Number.isFinite(Date.parse(v))) || Date.parse(value.startAt) >= Date.parse(value.endAt)) return null;
+    return {startAt:value.startAt,endAt:value.endAt,timeZone:value.timeZone};
+  }
+  function subscriptionInputValue(value) {
+    const stamp = Date.parse(value); try { return Number.isFinite(stamp) ? new Date(stamp + 8 * 3600000).toISOString().slice(0,19) : ''; } catch { return ''; }
+  }
+  function subscriptionPeriodFromInputs() {
+    const start = $('subscription-period-start').value.trim(), end = $('subscription-period-end').value.trim();
+    if (!start && !end) return null;
+    if (!start || !end) throw new Error('指定订阅周期时，请同时填写开始和结束时间；两项都留空可恢复每月续订日。');
+    const instant = value => {
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) throw new Error('请填写有效的订阅周期日期和时间。');
+      const normalized = value.length === 16 ? value + ':00' : value, result = normalized + '+08:00';
+      if (subscriptionInputValue(result) !== normalized) throw new Error('请填写有效的订阅周期日期和时间。');
+      return result;
+    };
+    const value = {startAt:instant(start),endAt:instant(end),timeZone:'Asia/Shanghai'};
+    if (Date.parse(value.startAt) >= Date.parse(value.endAt)) throw new Error('订阅周期结束时间必须晚于开始时间。');
+    return value;
+  }
+  function exactPeriodLabel(value) {
+    const period = copySubscriptionPeriod(value); if (!period) return '';
+    try {
+      const formatter = new Intl.DateTimeFormat('en-CA',{timeZone:period.timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+      const stamp = value => { const p = Object.fromEntries(formatter.formatToParts(new Date(value)).map(part => [part.type,part.value])); return p.year + '-' + p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute + (p.second === '00' ? '' : ':' + p.second); };
+      return stamp(period.startAt) + ' 至 ' + stamp(period.endAt) + ' · ' + (period.timeZone === 'Asia/Shanghai' ? '北京时间' : period.timeZone) + '（不含结束时刻）';
+    } catch { return period.startAt + ' 至 ' + period.endAt + '（不含结束时刻）'; }
   }
   function copySpeedWindows(value) { return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).map(([day,window]) => [day,window && typeof window === 'object' ? {...window} : window])) : {}; }
   function localSpeedWindow(day) {
@@ -1064,7 +1097,7 @@
     text('calculation-note',mode === 'api' ? 'API 等价费用 = 各模型的普通输入、缓存输入、输出分别乘以 API Standard 单价后相加，再换算货币。保留已观察到的缓存命中比例，不使用 Credit 购买比例，不含工具附加费与税费。' : mode === 'official' ? '估算金额 = 模型用量对应的 Credits × 每 Credit 美元价值 × 货币换算值。历史记录也会按当前设置重新展示。' : '估算金额 = 已记录总 Token ÷ 1,000,000 × 自定义比例。单价按所填单位计价，不随货币按钮换算。');
   }
   function openSettings() {
-    const settings = fullSettings(); $('currency-name').value = settings.currencyName; $('currency-symbol').value = settings.currencySymbol; $('rate-per-million').value = settings.ratePerMillion ?? ''; $('pricing-mode').value = settings.pricingMode; $('currency-code').value = settings.currencyCode; $('usd-per-credit').value = settings.usdPerCredit; $('credit-speed').value = settings.speedMode; $('currency-per-usd').value = settings.currencyPerUsd; $('exchange-cny').value = settings.exchangeRates.CNY; $('exchange-hkd').value = settings.exchangeRates.HKD; $('subscription-renewal-day').value = settings.subscriptionRenewalDay ?? ''; togglePricingFields(); $('settings-error').hidden = true; $('settings-dialog').showModal();
+    const settings = fullSettings(); $('currency-name').value = settings.currencyName; $('currency-symbol').value = settings.currencySymbol; $('rate-per-million').value = settings.ratePerMillion ?? ''; $('pricing-mode').value = settings.pricingMode; $('currency-code').value = settings.currencyCode; $('usd-per-credit').value = settings.usdPerCredit; $('credit-speed').value = settings.speedMode; $('currency-per-usd').value = settings.currencyPerUsd; $('exchange-cny').value = settings.exchangeRates.CNY; $('exchange-hkd').value = settings.exchangeRates.HKD; $('subscription-renewal-day').value = settings.subscriptionRenewalDay ?? ''; $('subscription-period-start').value = subscriptionInputValue(settings.subscriptionPeriod?.startAt); $('subscription-period-end').value = subscriptionInputValue(settings.subscriptionPeriod?.endAt); togglePricingFields(); $('settings-error').hidden = true; $('settings-dialog').showModal();
     text('credit-override-zone','当前时区：' + (Intl.DateTimeFormat().resolvedOptions().timeZone || '本地时区（未识别）') + '。再次确认已有日期也会重新绑定此时区。');
     speedOverrideDraft = {...settings.speedOverrides}; speedWindowDraft = copySpeedWindows(settings.speedOverrideWindows); const day = state?.periods?.today?.startDate; $('credit-override-date').value = validSpeedDate(day) ? day : ''; $('credit-override-speed').value = ['standard','fast','ultrafast'].includes(speedOverrideDraft[day]) ? speedOverrideDraft[day] : 'standard'; $('credit-override-error').hidden = true; renderSpeedOverrides();
   }
@@ -1154,6 +1187,7 @@
     if (Object.entries(submitted.speedOverrides).some(([day,speed]) => !validSpeedDate(day) || !['standard','fast','ultrafast'].includes(speed))) { text('settings-error','日期确认包含无效日期或速度，请修改后保存。'); $('settings-error').hidden = false; return; }
     if (renewal !== '' && (!/^\d{1,2}$/.test(renewal) || !validRenewalDay(Number(renewal)))) { text('settings-error','每月续订日请填写 1 至 31 的整数，或留空。'); $('settings-error').hidden = false; return; }
     submitted.subscriptionRenewalDay = renewal === '' ? null : Number(renewal);
+    try { submitted.subscriptionPeriod = subscriptionPeriodFromInputs(); } catch (error) { text('settings-error',error.message); $('settings-error').hidden = false; return; }
     if (!['api','official','custom'].includes(mode) || !['standard','fast','ultrafast','auto'].includes(submitted.speedMode) || !submitted.currencyName || (custom && rate !== '' && !isDecimal(rate)) || (official && !positiveDecimal(submitted.usdPerCredit)) || (!custom && (!positiveDecimal(submitted.currencyPerUsd) || !positiveDecimal(submitted.exchangeRates.CNY) || !positiveDecimal(submitted.exchangeRates.HKD)))) { text('settings-error',custom ? '请填写单位名称，并输入非负数字作为自定义比例。' : official ? '请填写货币名称，并为 Credit 单价及汇率填写大于零的数字。' : '请填写货币名称，并为汇率填写大于零的数字。'); $('settings-error').hidden = false; return; }
     if (!state?.csrfToken) { text('settings-error','尚未连接统计服务，请连接后再保存。'); $('settings-error').hidden = false; return; }
     $('save-settings').disabled = true;

@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from device_allocation import (build_allocation, validate_allocation, pricing_fingerprint,
                                DeviceAllocationError, MAX_ALLOCATION_BYTES)
-from periods import summarize_periods
+from periods import summarize_periods, select_subscription_turns
 from pricing import estimate_turn
 
 
@@ -262,6 +262,77 @@ class DeviceAllocationTests(unittest.TestCase):
             result["periods"]["today"][group]["tokens"] = counters(2000, 200, 400, 40)
         with self.assertRaises(DeviceAllocationError):
             validate_allocation(result)
+
+    def test_custom_subscription_preserves_exact_range_and_per_event_cost(self):
+        interval = {"startAt": "2026-10-20T00:00:00+08:00",
+                    "endAt": "2026-10-25T18:00:00+08:00", "timeZone": "Asia/Shanghai"}
+        options = {**SETTINGS, "subscriptionPeriod": interval}
+        boundary = datetime.fromisoformat(interval["endAt"]).timestamp()
+        first = turn(tokens=counters(2000, 200, 400, 40))
+        first["usageSegments"] = [{"timestamp": stamp, "tokens": counters(), "model": "gpt-6-astra",
+            "serviceTier": "default", "pricingMetadataStatus": "known", "apiContext": "short"}
+            for stamp in (boundary - 1, boundary)]
+        other = turn("old")
+        other["sourceAvailability"] = "archive"
+        other["usageSegments"] = [{"timestamp": boundary - 2, "tokens": counters(), "model": "gpt-6-luna",
+            "serviceTier": "priority", "pricingMetadataStatus": "known", "apiContext": "short"}]
+        report = self.build([first, other], [conversation(), conversation("old", missing=True)], settings=options)
+        sub = report["periods"]["subscription"]
+        self.assertEqual({name: sub[name] for name in interval}, interval)
+        self.assertEqual(sub["source"], "custom")
+        self.assertEqual(sub["total"]["tokens"]["total"], 2200)
+        self.assertEqual(sub["local"]["tokens"]["total"], 1100)
+        self.assertEqual(sub["other"]["tokens"]["total"], 1100)
+        self.assertEqual(report["periods"]["allTime"]["total"]["tokens"]["total"], 3300)
+        self.assert_conserved(report)
+        expected = summarize_periods([first, other], {**options, "pricingMode": "api", "currencyPerUsd": "1"}, now=NOW)
+        self.assertEqual(sub["total"]["usd"], expected["subscription"]["usd"])
+        self.assertEqual(validate_allocation(report), report)
+        self.assertNotEqual(pricing_fingerprint(options), pricing_fingerprint(SETTINGS))
+
+    def test_custom_subscription_legacy_boundary_day_stays_unassigned(self):
+        options = {**SETTINGS, "subscriptionPeriod": {
+            "startAt": "2026-10-20T00:00:00+08:00", "endAt": "2026-10-25T18:00:00+08:00",
+            "timeZone": "Asia/Shanghai"}}
+        result = self.build([turn(ident="middle", day="2026-10-24"), turn()], settings=options)
+        sub = result["periods"]["subscription"]
+        self.assertEqual(sub["total"]["tokens"]["total"], 1100)
+        self.assertEqual(sub["total"]["unassignedTokens"], 1100)
+        self.assertTrue(sub["total"]["partial"])
+        self.assertEqual(result["periods"]["allTime"]["total"]["unassignedTokens"], 0)
+        self.assertEqual(validate_allocation(result), result)
+        for mutate in (lambda value: value["periods"]["subscription"].pop("endAt"),
+                       lambda value: value["periods"]["subscription"].update(source="guessed"),
+                       lambda value: value["periods"]["subscription"].update(timeZone="invalid-zone")):
+            bad = deepcopy(result); mutate(bad)
+            with self.assertRaises(DeviceAllocationError):
+                validate_allocation(bad)
+
+    def test_private_preclipped_selection_matches_raw_events_and_preserves_partition(self):
+        options = {**SETTINGS, "subscriptionPeriod": {
+            "startAt": "2026-10-20T00:00:00+08:00", "endAt": "2026-10-25T18:00:00+08:00",
+            "timeZone": "Asia/Shanghai"}}
+        boundary = datetime.fromisoformat(options["subscriptionPeriod"]["endAt"]).timestamp()
+        values = [turn(tokens=counters(2000, 200, 400, 40)), turn("old")]
+        values[1]["sourceAvailability"] = "archive"
+        for index, value in enumerate(values):
+            value["usageSegments"] = [{"timestamp": stamp, "tokens": counters(), "model": "gpt-6-astra",
+                "serviceTier": "default", "pricingMetadataStatus": "known", "apiContext": "short"}
+                for stamp in ([boundary - 1, boundary] if index == 0 else [boundary - 2])]
+        conversations = [conversation(), conversation("old", missing=True)]
+        expected = self.build(values, conversations, settings=options)
+        selections = {value["threadId"]: select_subscription_turns([value], options) for value in values}
+        compact = [{key: content for key, content in value.items() if key != "usageSegments"} for value in values]
+        actual = build_allocation(compact, conversations, options, NOW, subscription_selections=selections)
+        self.assertEqual(actual, expected)
+        self.assertNotIn("threadId", json.dumps(actual))
+        bad = deepcopy(selections)
+        bad["local"]["endAt"] = "2026-10-24T18:00:00+08:00"
+        with self.assertRaises(DeviceAllocationError):
+            build_allocation(compact, conversations, options, NOW, subscription_selections=bad)
+        mixed = compact + [{**compact[0], "id": "second", "sourceAvailability": "archive"}]
+        with self.assertRaisesRegex(DeviceAllocationError, "collection_not_ready"):
+            build_allocation(mixed, conversations, options, NOW, subscription_selections=selections)
 
     def test_bad_clock_unknown_task_or_counter_fails_closed(self):
         for options in ({"now": datetime(2026, 10, 25)}, {"conversations": []},

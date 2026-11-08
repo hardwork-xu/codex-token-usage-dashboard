@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
-from periods import _prepare, _anchor, _adjacent_month
+from periods import _prepare, _anchor, _adjacent_month, select_subscription_turns
 from pricing import (API_RATE_DATE, API_SOURCE_URL, API_RATES, TOKEN_FIELDS, safe_model,
                      validated_slices, _estimate_single)
 
@@ -148,7 +148,8 @@ def _finish(bucket, unassigned, *, models=True):
     return value
 
 
-def build_analytics(turns, settings, *, now=None, reading_incomplete=False, read_error_count=0):
+def _build_analytics(turns, settings, *, now=None, reading_incomplete=False, read_error_count=0,
+                     period_override=None):
     """Summarize full locally registered history, never the UI's recent-row cap.
 
     Cached input is a subset of input; reasoning is a subset of output. Missing
@@ -179,12 +180,18 @@ def build_analytics(turns, settings, *, now=None, reading_incomplete=False, read
         if start > today:
             start = _adjacent_month(start, -1, renewal)
         ranges["subscription"] = (start, _adjacent_month(start, 1, renewal))
+    if period_override is not None:
+        ranges = {"subscription": (date.fromisoformat(period_override["startDate"]),
+                                   date.fromisoformat(period_override["endDate"]))}
+        unassigned += period_override["unassignedTokens"]
+        gap |= period_override["coverageGap"] or bool(unassigned)
     buckets = {name: _new_bucket(gap) for name in ranges}
     conversations = {name: {} for name in ranges}
     earliest = min(start for start, _ in ranges.values())
+    chart_end = ranges["subscription"][1] if period_override is not None else tomorrow
     days = {}
     cursor = earliest
-    while cursor < tomorrow:
+    while cursor < chart_end:
         days[cursor.isoformat()] = _new_bucket(gap)
         cursor += timedelta(days=1)
     with localcontext() as context:
@@ -258,3 +265,21 @@ def build_analytics(turns, settings, *, now=None, reading_incomplete=False, read
             "sourceUrl": API_SOURCE_URL, "unassignedTokens": unassigned, "periods": periods,
             "note": "仅分析本机已登记并采集的日志；同步副本不证明执行设备或付款账号。账号官方额度可能同时由其他设备消耗，差额本身不代表本机采集缺失。",
             "roundingNote": "按每轮、每个模型保留 6 位美元小数；跨日图表分别舍入，逐日金额之和可能有微小尾差。"}
+
+
+def build_analytics(turns, settings, *, now=None, reading_incomplete=False, read_error_count=0,
+                    subscription_selection=None):
+    """Keep daily views intact while clipping the custom period by event time."""
+    if now is None:
+        now = datetime.now().astimezone()
+    options = dict(now=now, reading_incomplete=reading_incomplete, read_error_count=read_error_count)
+    result = _build_analytics(turns, settings, **options)
+    selected = subscription_selection
+    if selected is None:
+        selected = select_subscription_turns(turns, settings)
+    if selected is not None:
+        custom = _build_analytics(selected["turns"], settings, period_override=selected, **options)
+        period = custom["periods"]["subscription"]
+        period.update({key: selected[key] for key in ("source", "startAt", "endAt", "timeZone", "endExclusive")})
+        result["periods"]["subscription"] = period
+    return result

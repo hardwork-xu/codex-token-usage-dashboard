@@ -145,6 +145,27 @@ class DeviceAllocationIntegrationTests(unittest.TestCase):
         self.assertEqual(all_time["local"]["tokens"]["total"], 0)
         self.assertEqual(report["unknownTaskCount"], 0)
 
+    def test_custom_period_uses_private_event_selection_after_history_compaction(self):
+        first, last = usage(100), usage(300, 200)
+        first["timestamp"] = "2026-10-16T00:00:00Z"
+        last["timestamp"] = "2026-10-16T00:00:01Z"
+        rows = records(finish=False)[:-1] + [first, last, event("task_complete", turn_id="turn")]
+        self.path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        interval = {"startAt": "2026-10-15T00:00:00+00:00",
+                    "endAt": "2026-10-16T00:00:01+00:00", "timeZone": "UTC"}
+        meter.write_json(self.folder / "settings.json", {"subscriptionRenewalDay": 9,
+                         "pricingMode": "api", "subscriptionPeriod": interval})
+        state = self.subject.snapshot()
+        self.assertEqual(state["turns"][0]["tokens"]["total"], 300)
+        self.assertNotIn("usageSegments", state["turns"][0])
+        self.assertEqual(state["periods"]["subscription"]["tokens"]["total"], 100)
+        report = self.subject.record_device_allocation({})["deviceAllocation"]
+        self.assertEqual(report["periods"]["subscription"]["total"]["tokens"]["total"], 100)
+        self.assertEqual(report["periods"]["subscription"]["total"]["unassignedTokens"], 0)
+        self.assertEqual(report["periods"]["allTime"]["total"]["tokens"]["total"], 300)
+        self.assertEqual({name: report["periods"]["subscription"][name] for name in interval}, interval)
+        self.assertEqual(validate_allocation(json.loads(self.report_path.read_text())), report)
+
     def test_only_empty_object_is_accepted_without_triggering_scan(self):
         for value in (None, [], True, 1, "{}", {"tokens": 100}, {"amount": "1"}, {"accountId": "private"}):
             with self.subTest(value=value), mock.patch.object(self.subject, "_snapshot_for_generation") as scan, self.assertRaises(ValueError):

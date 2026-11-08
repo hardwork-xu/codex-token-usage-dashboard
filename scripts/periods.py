@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date, datetime, timedelta
+from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP, localcontext
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pricing import credit_estimate_summary, estimate_turn, validated_slices, merge_speed_breakdowns
+from pricing import credit_estimate_summary, estimate_turn, validated_slices, merge_speed_breakdowns, safe_model
+from usage_log import _Turn, _override_windows, _timestamp
 
 
 _FIELDS = ("total", "input", "cachedInput", "cacheWriteInput", "output", "reasoningOutput")
@@ -85,6 +88,171 @@ def _prepare(turns):
         unassigned += residual["total"]
         prepared.append((turn, daily))
     return prepared, unassigned, coverage_gap
+
+
+def validated_subscription_period(value):
+    """Validate an optional fixed interval, without depending on system tzdata.
+
+    Beijing and UTC are fixed-offset zones so native Windows installations can
+    use the setting without adding packages. Other IANA zones require the
+    standard library's timezone database to be available.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"startAt", "endAt", "timeZone"}:
+        raise ValueError("订阅周期需要开始时间、结束时间和时区。")
+    name = value["timeZone"]
+    if not isinstance(name, str) or not name or len(name) > 80:
+        raise ValueError("订阅周期时区无效。")
+    try:
+        zone = {"Asia/Shanghai": timezone(timedelta(hours=8)), "UTC": timezone.utc}.get(name)
+        if zone is None:
+            zone = ZoneInfo(name)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise ValueError("订阅周期时区不可用。") from None
+    dates = []
+    for key in ("startAt", "endAt"):
+        raw = value[key]
+        if not isinstance(raw, str) or len(raw) > 40:
+            raise ValueError("订阅周期时间无效。")
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if (parsed.tzinfo is None or parsed.utcoffset() is None or parsed.timestamp() < 0
+                    or parsed.year >= 9999):
+                raise ValueError
+            dates.append(parsed.astimezone(zone))
+        except (ValueError, OverflowError, OSError):
+            raise ValueError("订阅周期时间必须包含有效时区。") from None
+    start, end = dates
+    elapsed = end.astimezone(timezone.utc) - start.astimezone(timezone.utc)
+    if not timedelta(0) < elapsed <= timedelta(days=366):
+        raise ValueError("订阅周期结束时间必须晚于开始时间，且范围不能超过 366 天。")
+    return {"startAt": start.isoformat(), "endAt": end.isoformat(), "timeZone": name}
+
+
+def _local_interval_days(start, end):
+    """The date envelope follows the same local calendar as existing charts."""
+    first = datetime.fromtimestamp(start.timestamp()).date()
+    # Subtract in UTC, since subtraction on a DST zone follows wall time.
+    last_second = end.astimezone(timezone.utc) - timedelta(microseconds=1)
+    last = datetime.fromtimestamp(last_second.timestamp()).date() + timedelta(days=1)
+    return first, last
+
+
+def select_subscription_turns(turns, settings):
+    """Clip observed usage to a fixed interval without allocating unknown time.
+
+    Original turns and durable event segments are never changed. The returned
+    turns are display-only projections: exact timestamped increments retain
+    their own model, speed and context. Legacy day-only observations can be
+    selected only when the entire local day lies within the fixed interval.
+    Unknown timestamps or intersecting boundary days remain unassigned.
+    """
+    settings = settings if isinstance(settings, dict) else {}
+    period = validated_subscription_period(settings.get("subscriptionPeriod"))
+    if period is None:
+        return None
+    start, end = (datetime.fromisoformat(period[key]) for key in ("startAt", "endAt"))
+    start_stamp, end_stamp = start.timestamp(), end.timestamp()
+    first, last = _local_interval_days(start, end)
+    selected, unassigned, gap = [], 0, not isinstance(turns, (list, tuple))
+    unique = {}
+    for index, turn in enumerate(turns if isinstance(turns, (list, tuple)) else []):
+        if not isinstance(turn, dict):
+            gap = True
+            continue
+        key = ((turn["threadId"], turn["id"]) if
+               isinstance(turn.get("threadId"), str) and isinstance(turn.get("id"), str)
+               else ("anonymous", index))
+        unique[key] = turn
+    windows = _override_windows(settings.get("speedOverrideWindows"))
+    for turn in unique.values():
+        total = _counters(turn.get("tokens"))
+        if total is None:
+            gap = True
+            continue
+        segments = turn.get("usageSegments")
+        segment_sum, valid_segments = _zero(), isinstance(segments, list)
+        if valid_segments:
+            for segment in segments:
+                amount = _counters(segment.get("tokens")) if isinstance(segment, dict) else None
+                if amount is None:
+                    valid_segments = False
+                    break
+                _add(segment_sum, amount)
+            valid_segments &= segment_sum == total
+        if valid_segments:
+            rebuilt = _Turn(turn.get("id"), turn.get("threadId"), turn.get("startedAt"),
+                            override_windows=windows)
+            for segment in segments:
+                stamp = _timestamp(segment.get("timestamp"))
+                if stamp is None:
+                    unassigned += segment["tokens"]["total"]
+                    continue
+                if start_stamp <= stamp < end_stamp:
+                    status = segment.get("pricingMetadataStatus")
+                    api_context = segment.get("apiContext")
+                    if api_context is not None and (not isinstance(api_context, str) or
+                                                    api_context not in {"short", "long", "unknown"}):
+                        api_context = "unknown"
+                    rebuilt.add(segment["tokens"], stamp, metadata={
+                        "model": safe_model(segment.get("model")),
+                        "serviceTier": safe_model(segment.get("serviceTier")),
+                        "pricingMetadataStatus": status if isinstance(status, str) and status in {"known", "unknown", "mixed"} else "unknown",
+                    }, api_context=api_context)
+            if not rebuilt.tokens or not rebuilt.tokens["total"]:
+                continue
+            projected = deepcopy({key: value for key, value in turn.items() if key not in
+                                  {"usageSegments", "usageSlices", "dailyUsage", "undatedTokens", "tokens"}})
+            projected.update(tokens=dict(rebuilt.tokens),
+                             dailyUsage={day: dict(amount) for day, amount in rebuilt.daily_usage.items()},
+                             undatedTokens=_zero(),
+                             usageSlices=[{"day": day, "speedOverrideDay": override_day, "model": model,
+                                           "serviceTier": tier, "pricingMetadataStatus": status,
+                                           "apiContext": context, "tokens": dict(amount)}
+                                          for (day, override_day, model, tier, status, context, _cache_write), amount
+                                          in rebuilt.usage_slices.items()])
+            selected.append(projected)
+            continue
+        # An invalid event stream cannot be used for precise slicing. Existing
+        # coherent day buckets still retain their known, fully covered portion.
+        gap |= "usageSegments" in turn
+        prepared, undated, bad_days = _prepare([turn])
+        unassigned += undated
+        gap |= bad_days
+        if not prepared:
+            continue
+        _, daily = prepared[0]
+        included, amount = {}, _zero()
+        for day, tokens in daily.items():
+            if not first <= day < last:
+                continue
+            midnight = datetime.combine(day, datetime.min.time()).astimezone()
+            tomorrow = datetime.combine(day + timedelta(days=1), datetime.min.time()).astimezone()
+            day_start, day_end = midnight.timestamp(), tomorrow.timestamp()
+            if start_stamp <= day_start and day_end <= end_stamp:
+                included[day.isoformat()] = dict(tokens)
+                _add(amount, tokens)
+            elif day_start < end_stamp and start_stamp < day_end:
+                unassigned += tokens["total"]
+        if not amount["total"]:
+            continue
+        projected = deepcopy({key: value for key, value in turn.items() if key not in
+                              {"usageSegments", "usageSlices", "dailyUsage", "undatedTokens", "tokens"}})
+        projected.update(tokens=amount, dailyUsage=included, undatedTokens=_zero())
+        try:
+            slices = validated_slices(turn)
+        except (ValueError, TypeError, OverflowError):
+            slices = None
+            projected.update(model=None, serviceTier=None, pricingMetadataStatus="unknown", quality="partial")
+            gap = True
+        if slices is not None:
+            projected["usageSlices"] = [item for item in slices if item["day"] in included]
+        selected.append(projected)
+    return {**period, "source": "custom", "endExclusive": True,
+            "startDate": first.isoformat(), "endDate": last.isoformat(),
+            "turns": selected, "unassignedTokens": unassigned,
+            "coverageGap": bool(gap or unassigned)}
 
 
 def _format(value):
@@ -243,7 +411,8 @@ def _adjacent_month(day, direction, renewal_day):
     return _anchor(year, month + 1, renewal_day)
 
 
-def summarize_periods(turns, settings, *, now=None, reading_incomplete=False, read_error_count=0):
+def summarize_periods(turns, settings, *, now=None, reading_incomplete=False, read_error_count=0,
+                      subscription_selection=None):
     """Aggregate all supplied turns; never apply a UI history limit here.
 
     Default dates use the machine's local calendar. An injected date or aware
@@ -272,7 +441,21 @@ def summarize_periods(turns, settings, *, now=None, reading_incomplete=False, re
         context.prec = 100
         today_result = _period(prepared, settings, today, today + timedelta(days=1),
                                unassigned=unassigned, coverage_gap=gap)
-        if renewal_day is None:
+        custom = (subscription_selection if subscription_selection is not None else
+                  select_subscription_turns(turns, settings))
+        if settings.get("subscriptionPeriod") is not None and custom is not None:
+            clipped, missing, clipped_gap = _prepare(custom["turns"])
+            subscription = _period(clipped, settings,
+                                   date.fromisoformat(custom["startDate"]), date.fromisoformat(custom["endDate"]),
+                                   unassigned=custom["unassignedTokens"] + missing,
+                                   coverage_gap=bool(gap or custom["coverageGap"] or clipped_gap))
+            subscription.update({key: custom[key] for key in
+                                 ("startAt", "endAt", "timeZone", "source", "endExclusive")})
+            subscription["note"] = ("按自定义起止时刻汇总，包含开始时刻、不包含结束时刻；日期仍按本机日历展示。 " +
+                                    subscription["note"])
+            if subscription["unassignedTokens"]:
+                subscription["note"] += " 部分 Token 缺少足够精确的事件时间，无法确定是否位于边界内，未计入自定义周期。"
+        elif renewal_day is None:
             subscription = {
                 "startDate": None, "endDate": None, "status": "needs_configuration", "tokens": None,
                 "amount": None, "credits": None, "usd": None, "unpricedTokens": 0,
@@ -295,4 +478,4 @@ def summarize_periods(turns, settings, *, now=None, reading_incomplete=False, re
             "renewalDay": renewal_day, "unassignedTokens": unassigned}
 
 
-__all__ = ["summarize_periods"]
+__all__ = ["summarize_periods", "validated_subscription_period", "select_subscription_turns"]
